@@ -10,6 +10,7 @@ def test_orchestrator_state_keys():
             output_format="both",
             pubmed_api_key=None,
             max_results=500,
+            search_sources=["pubmed", "biorxiv"],
         ),
         "pico": None,
         "search_counts": None,
