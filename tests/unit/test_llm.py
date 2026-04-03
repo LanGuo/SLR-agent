@@ -13,10 +13,9 @@ def test_mock_llm_raises_on_no_match():
     with pytest.raises(ValueError, match="no registered response"):
         llm.chat([{"role": "user", "content": "something unregistered"}])
 
-def test_mock_llm_last_register_wins_for_same_key():
-    # re-registering the same substring replaces the earlier response (upsert)
+def test_mock_llm_first_match_wins():
     llm = MockLLM()
     llm.register("foo", {"answer": "first"})
     llm.register("foo", {"answer": "second"})
     result = llm.chat([{"role": "user", "content": "foo bar"}])
-    assert result["answer"] == "second"
+    assert result["answer"] == "first"

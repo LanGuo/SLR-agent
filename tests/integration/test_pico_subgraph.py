@@ -33,13 +33,24 @@ def test_pico_subgraph_produces_result(mock_llm):
     assert len(result["pico"]["query_strings"]) == 2
     assert result["validation_errors"] == []
 
-def test_pico_subgraph_detects_non_english(mock_llm):
-    mock_llm.register("detect the language", {"language_code": "fr"})
-    mock_llm.register("translate the following research question to English", {
+def test_pico_subgraph_detects_non_english():
+    from slr_agent.llm import MockLLM
+    llm = MockLLM()
+    llm.register("detect the language", {"language_code": "fr"})
+    llm.register("translate the following research question to English", {
         "translated": "Do ACE inhibitors reduce blood pressure in hypertensive adults?"
     })
-    graph = create_pico_subgraph(llm=mock_llm)
-    initial: PICOSubgraphState = {
+    llm.register("expand this research question into PICO", {
+        "population": "adults with hypertension",
+        "intervention": "ACE inhibitors",
+        "comparator": "placebo",
+        "outcome": "blood pressure reduction",
+    })
+    llm.register("generate PubMed search query strings", {
+        "query_strings": ["hypertension[MeSH] AND ACE inhibitors[tiab]"]
+    })
+    graph = create_pico_subgraph(llm=llm)
+    initial = {
         "raw_question": "Les inhibiteurs de l'ECA réduisent-ils la pression artérielle?",
         "pico": None,
         "validation_errors": [],
