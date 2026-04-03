@@ -1,5 +1,5 @@
 from typing import Literal
-from typing_extensions import TypedDict, NotRequired
+from typing_extensions import TypedDict
 from rapidfuzz import fuzz
 from slr_agent.db import Span, QuarantinedField
 
