@@ -85,13 +85,12 @@ class Database:
         self.path = path
         with self.connect() as conn:
             conn.executescript(_SCHEMA)
-        with self.connect() as conn:
-            conn.execute("PRAGMA foreign_keys = ON")
 
     @contextmanager
     def connect(self):
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
         try:
             yield conn
             conn.commit()

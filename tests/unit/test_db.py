@@ -36,6 +36,7 @@ def test_upsert_and_get_paper(db):
         provenance=[],
         quarantined_fields=[],
     )
+    db.ensure_run("run-1")
     db.upsert_paper(paper)
     retrieved = db.get_paper("run-1", "12345")
     assert retrieved["title"] == "Test paper"
@@ -48,12 +49,14 @@ def test_quarantine_insert(db):
         stage="extraction",
         reason="no matching span",
     )
+    db.ensure_run("run-1")
     db.insert_quarantine("run-1", "12345", field)
     rows = db.get_quarantine("run-1")
     assert len(rows) == 1
     assert rows[0]["field_name"] == "sample_size"
 
 def test_get_papers_by_decision(db):
+    db.ensure_run("run-1")
     for pmid, decision in [("1", "include"), ("2", "exclude"), ("3", "include")]:
         db.upsert_paper(PaperRecord(
             pmid=pmid, run_id="run-1", title=f"Paper {pmid}",
@@ -79,6 +82,7 @@ def test_ensure_run_is_idempotent(db):
     assert count == 1
 
 def test_get_all_papers(db):
+    db.ensure_run("run-all")
     for pmid in ["a", "b", "c"]:
         db.upsert_paper(PaperRecord(
             pmid=pmid, run_id="run-all", title=f"Paper {pmid}",
