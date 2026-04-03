@@ -22,11 +22,12 @@ class LLMClient:
                 response = ollama.chat(**kwargs)
                 content = response["message"]["content"]
                 return json.loads(content) if schema else {"text": content}
-            except (json.JSONDecodeError, KeyError) as e:
+            except json.JSONDecodeError as e:
                 last_error = e
-                # Ask model to correct its output
+                # Ask model to correct its malformed JSON output
+                raw_content = response["message"]["content"]
                 messages = messages + [
-                    {"role": "assistant", "content": response["message"]["content"]},
+                    {"role": "assistant", "content": raw_content},
                     {"role": "user", "content": "Your response was not valid JSON. Reply with valid JSON only."},
                 ]
                 time.sleep(2 ** attempt)
