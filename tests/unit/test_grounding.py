@@ -1,6 +1,7 @@
 import pytest
-from slr_agent.grounding import ExtractionGrounder, GroundedField
+from slr_agent.grounding import ExtractionGrounder, GroundedField, SynthesisGrounder
 from slr_agent.db import Span
+from slr_agent.llm import MockLLM
 
 ABSTRACT = (
     "500 adults with hypertension were randomised to aspirin 100mg daily or placebo "
@@ -51,3 +52,31 @@ def test_ground_extracted_data_returns_grounded_and_quarantined():
     assert "intervention" in grounded
     assert len(quarantined) == 1
     assert quarantined[0]["field_name"] == "hallucination"
+
+def test_synthesis_grounding_passes_with_citations(mock_llm):
+    mock_llm.register(
+        "Is this claim supported",
+        {"supporting_pmids": ["1", "2"], "confidence": "high"},
+    )
+    grounder = SynthesisGrounder(llm=mock_llm)
+    result = grounder.ground_claim(
+        claim="Aspirin significantly reduces systolic blood pressure.",
+        paper_extractions=[
+            {"pmid": "1", "result": "SBP reduction 8.2 mmHg (p<0.001)"},
+            {"pmid": "2", "result": "SBP reduction 7.1 mmHg (p<0.01)"},
+        ],
+    )
+    assert result["status"] == "grounded"
+    assert "1" in result["supporting_pmids"]
+
+def test_synthesis_grounding_quarantines_unsupported_claim(mock_llm):
+    mock_llm.register(
+        "Is this claim supported",
+        {"supporting_pmids": [], "confidence": "none"},
+    )
+    grounder = SynthesisGrounder(llm=mock_llm)
+    result = grounder.ground_claim(
+        claim="This treatment eliminates all cardiovascular risk.",
+        paper_extractions=[{"pmid": "1", "result": "modest effect"}],
+    )
+    assert result["status"] == "quarantined"

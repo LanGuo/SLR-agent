@@ -1,5 +1,5 @@
 from typing import Literal
-from typing_extensions import TypedDict
+from typing_extensions import TypedDict, NotRequired
 from rapidfuzz import fuzz
 from slr_agent.db import Span, QuarantinedField
 
@@ -82,3 +82,56 @@ class ExtractionGrounder:
                 ))
 
         return grounded, quarantined
+
+
+class GroundedClaim(TypedDict):
+    claim: str
+    supporting_pmids: list[str]
+    status: Literal["grounded", "quarantined"]
+    confidence: str
+
+
+class SynthesisGrounder:
+    def __init__(self, llm):
+        self.llm = llm
+
+    def ground_claim(
+        self,
+        claim: str,
+        paper_extractions: list[dict],
+    ) -> GroundedClaim:
+        extractions_text = "\n".join(
+            f"[PMID {p['pmid']}]: {p.get('result', '')}"
+            for p in paper_extractions
+        )
+        messages = [
+            {
+                "role": "user",
+                "content": (
+                    f"Is this claim supported by the paper extractions below?\n\n"
+                    f"CLAIM: {claim}\n\n"
+                    f"EXTRACTIONS:\n{extractions_text}\n\n"
+                    "Return JSON with fields: supporting_pmids (list of PMIDs that "
+                    "directly support this claim), confidence (high/moderate/low/none)."
+                ),
+            }
+        ]
+        schema = {
+            "type": "object",
+            "properties": {
+                "supporting_pmids": {"type": "array", "items": {"type": "string"}},
+                "confidence": {"type": "string"},
+            },
+            "required": ["supporting_pmids", "confidence"],
+        }
+        result = self.llm.chat(messages, schema=schema)
+        pmids = result.get("supporting_pmids", [])
+        status: Literal["grounded", "quarantined"] = (
+            "grounded" if pmids else "quarantined"
+        )
+        return GroundedClaim(
+            claim=claim,
+            supporting_pmids=pmids,
+            status=status,
+            confidence=result.get("confidence", "none"),
+        )
