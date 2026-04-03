@@ -17,7 +17,7 @@ A general-purpose Systematic Literature Review (SLR) agent that takes any resear
 | Decision | Choice | Rationale |
 |---|---|---|
 | Model | Gemma 4 26B MoE (4-bit, ~18GB RAM) via Ollama | Best quality/feasibility on Mac Mini 24GB+; 256K context for full-text |
-| Databases | PubMed only (Entrez API) | Free, no auth, 35M papers, sufficient for demo |
+| Databases | PubMed (Entrez API) + bioRxiv (optional) | PubMed: 35M peer-reviewed papers; bioRxiv: cutting-edge preprints not yet in PubMed |
 | Output format | Markdown + Word (.docx via Pandoc) | What researchers actually use |
 | Orchestration | LangGraph hierarchical subgraphs | Explicit state machine, built-in checkpoint/resume, interrupt for HITL |
 | Interaction surface | CLI core + Gradio UI | CLI is testable/composable; Gradio adds review panels without coupling |
@@ -185,11 +185,19 @@ class GRADEScore(TypedDict):
 
 ```python
 class RunConfig(TypedDict):
-    checkpoint_stages: list[int]  # default [1, 3, 5] (PICO=1, Screening=3, Extraction=5); stages numbered 1–7
-    fetch_fulltext: bool          # default True
+    checkpoint_stages: list[int]   # default [1, 3, 5]
+    fetch_fulltext: bool           # default True
     output_format: Literal["markdown", "word", "both"]  # default "both"
-    pubmed_api_key: str | None    # optional, raises rate limit to 10 req/s
-    max_results: int              # PubMed search cap, default 500
+    pubmed_api_key: str | None
+    max_results: int               # per source, default 500
+    search_sources: list[Literal["pubmed", "biorxiv"]]  # default ["pubmed", "biorxiv"]
+```
+
+```python
+DEFAULT_CONFIG = {
+    ...
+    "search_sources": ["pubmed", "biorxiv"],
+}
 ```
 
 ---
@@ -315,7 +323,7 @@ Fixture test that injects a `PaperRecord` with a deliberately hallucinated extra
 |---|---|
 | LLM runtime | Ollama — Gemma 4 26B MoE (4-bit, ~18GB RAM) |
 | Orchestration | LangGraph (hierarchical subgraphs, SQLite checkpointer) |
-| Search | PubMed Entrez (Biopython `Entrez`) |
+| Search | PubMed Entrez (Biopython `Entrez`) + bioRxiv API (httpx) |
 | PDF parsing | PyMuPDF |
 | Fuzzy matching | rapidfuzz |
 | Grounding / JSON | Gemma 4 function-calling mode |
@@ -329,7 +337,7 @@ Fixture test that injects a `PaperRecord` with a deliberately hallucinated extra
 
 ## 11. Out of Scope
 
-- Databases other than PubMed (Embase, Cochrane, Semantic Scholar)
+- Databases other than PubMed and bioRxiv (Embase, Cochrane, Semantic Scholar)
 - Statistical meta-analysis / forest plots (GRADE scoring only)
 - LaTeX output
 - Cloud LLM fallback
