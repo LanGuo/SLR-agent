@@ -44,6 +44,10 @@ class MockLLM:
         self._responses: list[tuple[str, dict]] = []
 
     def register(self, prompt_contains: str, response: dict) -> None:
+        for i, (substr, _) in enumerate(self._responses):
+            if substr == prompt_contains:
+                self._responses[i] = (prompt_contains, response)
+                return
         self._responses.append((prompt_contains, response))
 
     def chat(self, messages: list[dict], schema: dict | None = None) -> dict:
