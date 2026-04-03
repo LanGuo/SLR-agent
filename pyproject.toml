@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "slr-agent"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph>=0.2.0",
+    "langchain-community>=0.2.0",
+    "biopython>=1.83",
+    "pymupdf>=1.24.0",
+    "rapidfuzz>=3.6.0",
+    "gradio>=4.0.0",
+    "click>=8.1.0",
+    "ollama>=0.2.0",
+    "httpx>=0.27.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0"]
+
+[project.scripts]
+slr = "slr_agent.cli:cli"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--tb=short -m 'not e2e'"
+markers = ["e2e: end-to-end tests requiring Ollama and internet (run manually)"]
