@@ -45,6 +45,7 @@ class PaperRecord(TypedDict):
 
 
 _SCHEMA = """
+PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY,
     created_at TEXT DEFAULT (datetime('now')),
@@ -63,16 +64,18 @@ CREATE TABLE IF NOT EXISTS papers (
     grade_score TEXT DEFAULT '{}',
     provenance TEXT DEFAULT '[]',
     quarantined_fields TEXT DEFAULT '[]',
-    PRIMARY KEY (pmid, run_id)
+    PRIMARY KEY (pmid, run_id),
+    FOREIGN KEY (run_id) REFERENCES runs(run_id)
 );
 CREATE TABLE IF NOT EXISTS quarantine (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id TEXT NOT NULL,
     pmid TEXT NOT NULL,
-    field_name TEXT,
-    value TEXT,
-    stage TEXT,
-    reason TEXT
+    field_name TEXT NOT NULL,
+    value TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    FOREIGN KEY (run_id) REFERENCES runs(run_id)
 );
 """
 
@@ -82,6 +85,8 @@ class Database:
         self.path = path
         with self.connect() as conn:
             conn.executescript(_SCHEMA)
+        with self.connect() as conn:
+            conn.execute("PRAGMA foreign_keys = ON")
 
     @contextmanager
     def connect(self):
@@ -90,6 +95,9 @@ class Database:
         try:
             yield conn
             conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
@@ -133,7 +141,7 @@ class Database:
         return self._row_to_paper(row)
 
     def get_papers_by_decision(
-        self, run_id: str, decision: str
+        self, run_id: str, decision: Literal["include", "exclude", "uncertain"]
     ) -> list[PaperRecord]:
         with self.connect() as conn:
             rows = conn.execute(

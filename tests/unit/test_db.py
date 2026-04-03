@@ -67,3 +67,28 @@ def test_get_papers_by_decision(db):
         ))
     included = db.get_papers_by_decision("run-1", "include")
     assert len(included) == 2
+
+def test_ensure_run_is_idempotent(db):
+    # Calling ensure_run twice on the same run_id must not raise
+    db.ensure_run("run-idem")
+    db.ensure_run("run-idem")  # second call must be a no-op
+    with db.connect() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM runs WHERE run_id=?", ("run-idem",)
+        ).fetchone()[0]
+    assert count == 1
+
+def test_get_all_papers(db):
+    for pmid in ["a", "b", "c"]:
+        db.upsert_paper(PaperRecord(
+            pmid=pmid, run_id="run-all", title=f"Paper {pmid}",
+            abstract="Abstract.", fulltext=None, source="abstract",
+            screening_decision="uncertain", screening_reason="",
+            extracted_data={}, grade_score=GRADEScore(
+                certainty="low", risk_of_bias="high", inconsistency="no",
+                indirectness="no", imprecision="no", rationale="x"
+            ),
+            provenance=[], quarantined_fields=[],
+        ))
+    papers = db.get_all_papers("run-all")
+    assert len(papers) == 3
