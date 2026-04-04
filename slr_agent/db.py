@@ -1,8 +1,12 @@
 import json
 import sqlite3
+import os
 from contextlib import contextmanager
 from typing import Literal
 from typing_extensions import TypedDict
+
+import fitz  # PyMuPDF
+from Bio import Entrez
 
 
 class Span(TypedDict):
@@ -173,6 +177,77 @@ class Database:
                 "SELECT * FROM quarantine WHERE run_id=?", (run_id,)
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def add_paper_from_pmid(
+        self, run_id: str, pmid: str, api_key: str | None = None
+    ) -> "PaperRecord | None":
+        """Fetch a paper from PubMed by PMID and insert it. Returns None on failure."""
+        if api_key:
+            Entrez.api_key = api_key
+        Entrez.email = "slr-agent@local"
+        try:
+            handle = Entrez.efetch(db="pubmed", id=pmid, rettype="xml", retmode="xml")
+            records = Entrez.read(handle)
+            handle.close()
+            articles = records.get("PubmedArticle", [])
+            if not articles:
+                return None
+            citation = articles[0]["MedlineCitation"]
+            art = citation.get("Article", {})
+            title = str(art.get("ArticleTitle", ""))
+            abstract_obj = art.get("Abstract", {})
+            abstract = str(abstract_obj.get("AbstractText", "")) if abstract_obj else ""
+        except Exception:
+            return None
+
+        paper = PaperRecord(
+            pmid=str(pmid),
+            run_id=run_id,
+            title=title,
+            abstract=abstract,
+            fulltext=None,
+            source="manual",
+            screening_decision="uncertain",
+            screening_reason="Manually added by user",
+            extracted_data={},
+            grade_score=GRADEScore(
+                certainty="low", risk_of_bias="high",
+                inconsistency="no", indirectness="no",
+                imprecision="no", rationale="Not yet assessed",
+            ),
+            provenance=[],
+            quarantined_fields=[],
+        )
+        self.upsert_paper(paper)
+        return paper
+
+    def add_paper_from_pdf(
+        self, run_id: str, pdf_path: str, metadata: dict
+    ) -> "PaperRecord":
+        """Extract fulltext from a PDF and insert as a manually added paper."""
+        doc = fitz.open(pdf_path)
+        fulltext = "\n".join(page.get_text() for page in doc)
+
+        paper = PaperRecord(
+            pmid=metadata.get("pmid", f"pdf:{os.path.basename(pdf_path)}"),
+            run_id=run_id,
+            title=metadata.get("title", os.path.basename(pdf_path)),
+            abstract=metadata.get("abstract", fulltext[:500]),
+            fulltext=fulltext,
+            source="manual",
+            screening_decision="uncertain",
+            screening_reason="Manually uploaded PDF",
+            extracted_data={},
+            grade_score=GRADEScore(
+                certainty="low", risk_of_bias="high",
+                inconsistency="no", indirectness="no",
+                imprecision="no", rationale="Not yet assessed",
+            ),
+            provenance=[],
+            quarantined_fields=[],
+        )
+        self.upsert_paper(paper)
+        return paper
 
     def ensure_run(self, run_id: str) -> None:
         with self.connect() as conn:
