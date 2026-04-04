@@ -1,7 +1,17 @@
+import re
 from typing import Literal
 from typing_extensions import TypedDict
 from rapidfuzz import fuzz
 from slr_agent.db import Span, QuarantinedField
+
+# Threshold by source type: abstracts paraphrase full text, so legitimate
+# extractions score lower than verbatim full-text matches.
+_THRESHOLD_ABSTRACT = 75
+_THRESHOLD_FULLTEXT = 85
+
+# Values shorter than this are grounded by exact substring search instead of
+# fuzzy matching — fuzzy scores on short strings (e.g. "96") are unreliable.
+_SHORT_VALUE_CHARS = 20
 
 
 class GroundedField(TypedDict):
@@ -12,8 +22,15 @@ class GroundedField(TypedDict):
 
 
 class ExtractionGrounder:
-    def __init__(self, threshold: int = 85):
-        self.threshold = threshold
+    def __init__(self, threshold: int | None = None):
+        # threshold param kept for backward compatibility; source-adaptive thresholds
+        # are used instead when None (see _THRESHOLD_ABSTRACT / _THRESHOLD_FULLTEXT).
+        self._override_threshold = threshold
+
+    def _threshold_for(self, source: Literal["abstract", "fulltext"]) -> int:
+        if self._override_threshold is not None:
+            return self._override_threshold
+        return _THRESHOLD_ABSTRACT if source == "abstract" else _THRESHOLD_FULLTEXT
 
     def ground_field(
         self,
@@ -23,35 +40,61 @@ class ExtractionGrounder:
         pmid: str,
         source: Literal["abstract", "fulltext"],
     ) -> GroundedField:
-        # First check overall score against full source text using partial_ratio
-        # (partial_ratio finds the best matching substring internally)
-        overall_score = fuzz.partial_ratio(value.lower(), source_text.lower())
+        threshold = self._threshold_for(source)
+        value_lower = value.lower()
+        source_lower = source_text.lower()
 
-        if overall_score < self.threshold:
+        # Short values (numbers, short phrases): exact substring search is more
+        # reliable than fuzzy matching, which is noise-dominated for short strings.
+        if len(value) < _SHORT_VALUE_CHARS:
+            if value_lower in source_lower:
+                idx = source_lower.index(value_lower)
+                return GroundedField(
+                    value=value,
+                    span=Span(pmid=pmid, source=source,
+                              char_start=idx, char_end=idx + len(value),
+                              text=source_text[idx: idx + len(value)]),
+                    confidence=100.0,
+                    status="grounded",
+                )
+            return GroundedField(value=value, span=None, confidence=0.0, status="quarantined")
+
+        # Longer values: token_set_ratio handles word-order differences (paraphrasing)
+        # better than partial_ratio, which is character-order sensitive.
+        overall_score = fuzz.token_set_ratio(value_lower, source_lower)
+        if overall_score < threshold:
             return GroundedField(value=value, span=None, confidence=overall_score, status="quarantined")
 
-        # Locate the best-matching span by sliding a window of ~len(value) chars
-        window = max(len(value), 30)
+        # Locate best-matching span using sentence-level chunks (fast) rather than
+        # a character-by-character sliding window (O(n) calls for a 6000-char text).
+        sentences = re.split(r"(?<=[.!?])\s+", source_text)
+        # Build sentence start offsets
+        offsets: list[int] = []
+        pos = 0
+        for s in sentences:
+            offsets.append(pos)
+            pos += len(s) + 1  # +1 for the space consumed by the split
+
+        # Score each sentence; use a context window of up to 3 sentences for
+        # multi-sentence extractions (e.g. full result descriptions).
         best_score = 0.0
         best_start = 0
-
-        for i in range(0, max(1, len(source_text) - window + 1), 1):
-            chunk = source_text[i : i + window]
-            score = fuzz.partial_ratio(value.lower(), chunk.lower())
+        best_end = min(len(value) * 2, len(source_text))
+        window_size = 3
+        for i in range(len(sentences)):
+            chunk = " ".join(sentences[i: i + window_size])
+            score = fuzz.token_set_ratio(value_lower, chunk.lower())
             if score > best_score:
                 best_score = score
-                best_start = i
+                best_start = offsets[i]
+                end_idx = min(i + window_size - 1, len(sentences) - 1)
+                best_end = offsets[end_idx] + len(sentences[end_idx])
 
-        end = min(best_start + window, len(source_text))
         return GroundedField(
             value=value,
-            span=Span(
-                pmid=pmid,
-                source=source,
-                char_start=best_start,
-                char_end=end,
-                text=source_text[best_start:end],
-            ),
+            span=Span(pmid=pmid, source=source,
+                      char_start=best_start, char_end=best_end,
+                      text=source_text[best_start:best_end]),
             confidence=overall_score,
             status="grounded",
         )

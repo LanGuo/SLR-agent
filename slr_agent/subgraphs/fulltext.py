@@ -35,7 +35,7 @@ def _fetch_fulltext_node(state: dict, db: Database, llm) -> dict:
     run_id = state["run_id"]
     pico = state["pico"]
     included = db.get_papers_by_decision(run_id, "include")
-    grounder = ExtractionGrounder(threshold=85)
+    grounder = ExtractionGrounder()
 
     n_fetched = n_unavailable = n_excluded = 0
 

@@ -28,7 +28,7 @@ def _extract_node(state: dict, db: Database, llm) -> dict:
     run_id = state["run_id"]
     pico = state["pico"]
     included = db.get_papers_by_decision(run_id, "include")
-    grounder = ExtractionGrounder(threshold=85)
+    grounder = ExtractionGrounder()
 
     counts = ExtractionCounts(
         n_extracted=0, n_grade_high=0, n_grade_moderate=0,

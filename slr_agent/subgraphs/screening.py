@@ -10,7 +10,7 @@ def _screen_abstracts_node(state: dict, db: Database, llm) -> dict:
     run_id = state["run_id"]
     pico = state["pico"]
     papers = db.get_all_papers(run_id)
-    grounder = ExtractionGrounder(threshold=85)
+    grounder = ExtractionGrounder()
 
     n_included = n_excluded = n_uncertain = 0
 
