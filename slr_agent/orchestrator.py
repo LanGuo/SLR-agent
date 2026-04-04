@@ -123,7 +123,7 @@ def create_orchestrator(
         except ImportError:
             import warnings
             warnings.warn(
-                f"langgraph.checkpoint.sqlite not available — compiling without checkpointer. "
+                f"langgraph-checkpoint-sqlite not installed — compiling without checkpointer. "
                 f"Resume and HITL interrupts will not persist.",
                 RuntimeWarning,
                 stacklevel=2,
