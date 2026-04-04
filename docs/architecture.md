@@ -233,21 +233,56 @@ Stage 7 runs in a loop while the user keeps requesting revisions:
 
 ## Grounding Layer
 
-Every LLM-extracted value is fuzzy-matched against its source text using **rapidfuzz** `token_sort_ratio` with threshold 85.
+Every LLM-extracted value is verified against its source text before being stored. The goal is to catch hallucinations — values the LLM invented rather than derived from the paper.
+
+### Decision flow
 
 ```
-extracted_value ─── fuzzy_match ──▶ source_text
-                          ├── score ≥ 85 → Span(char_start, char_end, text) stored as provenance
-                          └── score < 85 → QuarantinedField written to quarantine table
+extracted_value
+    │
+    ├── len < 20 chars? ──▶ exact substring search
+    │                           ├── found → grounded (confidence=100)
+    │                           └── not found → quarantined (confidence=0)
+    │
+    └── len ≥ 20 chars? ──▶ token_set_ratio vs full source text
+                                ├── score ≥ threshold → locate span in sentence chunks → grounded
+                                └── score < threshold → quarantined
 ```
 
-**Quarantine behaviour:**
+### Metric: `token_set_ratio`
+
+`token_set_ratio` (rapidfuzz) sorts both strings into token sets before comparing. This handles word-order differences and paraphrasing — common when extracting from abstracts, which summarise full-text findings in different phrasing. `partial_ratio` (character-order sensitive) was used previously and incorrectly quarantined correct paraphrased extractions.
+
+### Source-adaptive threshold
+
+Abstracts are paraphrased summaries; full text is verbatim. A single threshold produces too many false quarantines on abstract-sourced papers:
+
+| Source | Threshold |
+|---|---|
+| `abstract` | 75 |
+| `fulltext` | 85 |
+
+The threshold can be overridden by passing `threshold=N` to `ExtractionGrounder()`.
+
+### Short value handling
+
+Fuzzy matching on strings shorter than 20 characters (e.g. sample sizes like `"96"`, durations like `"4 weeks"`) is unreliable — the score is dominated by token overlap noise. These are handled with exact case-insensitive substring search instead.
+
+### Span location
+
+When a value passes the threshold check, its location in the source text is recorded as a `Span(char_start, char_end, text)` for provenance. Span location uses **sentence-level chunking** (windows of 3 sentences scored with `token_set_ratio`) rather than a character-by-character sliding window, which was O(n) fuzzy calls for a 6000-character source text.
+
+### Quarantine behaviour
+
 - Quarantined fields are stored, not dropped — the paper is not discarded
+- `extracted_data` contains only grounded fields; quarantined fields are in `quarantined_fields`
 - They appear in HITL gates for manual resolution: accept / edit / discard
 - PRISMA flow diagram includes quarantine counts as a data quality signal
 - Full quarantine table queryable via SQLite or `slr status <run_id>`
 
-**Synthesis grounding (Stage 6):** Gemma 4 is asked to cite the PMIDs that support each synthesised claim. Claims with zero citations are quarantined.
+### Synthesis grounding (Stage 6)
+
+A separate LLM-based grounding step: Gemma is asked to cite the PMIDs that support each synthesised claim. Claims with zero citations are quarantined. This is semantic rather than lexical — appropriate for synthesised statements that combine evidence across papers.
 
 ---
 
