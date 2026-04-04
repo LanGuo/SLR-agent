@@ -1,4 +1,5 @@
 # slr_agent/orchestrator.py
+import os
 import uuid
 from typing import Any
 from langgraph.graph import StateGraph, END
@@ -7,6 +8,7 @@ from slr_agent.broker import CheckpointBroker, NoOpHandler
 from slr_agent.config import RunConfig, DEFAULT_CONFIG
 from slr_agent.db import Database
 from slr_agent.emitter import ProgressEmitter
+from slr_agent.template import load_template
 from slr_agent.subgraphs.pico import create_pico_subgraph
 from slr_agent.subgraphs.search import create_search_subgraph
 from slr_agent.subgraphs.screening import create_screening_subgraph
@@ -168,7 +170,7 @@ def create_orchestrator(
         run_id = state["run_id"]
         synthesis_path = result.get("synthesis_path", "")
         synthesis_text = ""
-        if synthesis_path and __import__("os").path.exists(synthesis_path):
+        if synthesis_path and os.path.exists(synthesis_path):
             with open(synthesis_path) as f:
                 synthesis_text = f.read()
         emit_data = {"synthesis_path": synthesis_path, "preview": synthesis_text[:500]}
@@ -181,7 +183,6 @@ def create_orchestrator(
         template = state.get("template")
         template_path = cfg.get("template_path")
         if template is None and template_path:
-            from slr_agent.template import load_template
             template = load_template(template_path, llm)
 
         result = manuscript_sg.invoke({**state, "template": template})
@@ -190,13 +191,18 @@ def create_orchestrator(
         # Stage 7 revision loop
         if 7 in checkpoint_stages:
             while True:
-                draft = open(result["manuscript_path"]).read()
+                manuscript_path = result.get("manuscript_path")
+                if not manuscript_path or not os.path.exists(manuscript_path):
+                    break
+                with open(manuscript_path) as fh:
+                    draft = fh.read()
                 rubric = result.get("manuscript_rubric", {})
                 checkpoint_data = {
                     "draft": draft,
                     "rubric": rubric,
                     "draft_version": result.get("manuscript_draft_version", 1),
                 }
+                _get_emitter(run_id).emit(7, {"rubric": rubric, "draft_version": checkpoint_data["draft_version"]})
                 edited = _broker.pause(7, "manuscript", checkpoint_data)
                 if edited.get("action") != "revise":
                     break
