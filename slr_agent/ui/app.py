@@ -1,4 +1,5 @@
 # slr_agent/ui/app.py
+import json
 import queue
 import threading
 import uuid
@@ -152,7 +153,7 @@ def build_app_with_handler(ui_handler: UIHandler, run_id: str) -> gr.Blocks:
         # gr.Group supports visibility toggling reliably in Gradio 6
         with gr.Group(visible=False) as checkpoint_area:
             stage_label = gr.Markdown("## Checkpoint")
-            data_json = gr.JSON(label="Stage Data")
+            data_code = gr.Code(label="Stage Data (editable JSON)", language="json", interactive=True)
             approve_btn = gr.Button("Approve & Continue", variant="primary")
 
         def poll_checkpoint(pending):
@@ -161,29 +162,33 @@ def build_app_with_handler(ui_handler: UIHandler, run_id: str) -> gr.Blocks:
                 return gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
             cp = ui_handler.get_pending(timeout=0.1)
             if cp is None:
-                return pending, "Waiting for pipeline checkpoint...", gr.update(visible=False), "", None
+                return pending, "Waiting for pipeline checkpoint...", gr.update(visible=False), "", ""
             return (
                 cp,
-                "Review the data below and approve to continue.",
+                "Review and edit the data below, then click Approve.",
                 gr.update(visible=True),
                 f"## Stage {cp['stage']}: {cp['stage_name'].upper()}",
-                cp["data"],
+                json.dumps(cp["data"], indent=2),
             )
 
-        def approve(pending, data):
+        def approve(pending, data_str):
             if pending is None:
                 return None, "No pending checkpoint.", gr.update(visible=False)
-            ui_handler.resume({**(data or {}), "action": "approve"})
+            try:
+                edited = json.loads(data_str) if data_str else {}
+            except json.JSONDecodeError:
+                return pending, "Invalid JSON — fix the data and try again.", gr.update(visible=True)
+            ui_handler.resume({**edited, "action": "approve"})
             return None, "Approved. Waiting for next checkpoint...", gr.update(visible=False)
 
         gr.Timer(1).tick(
             poll_checkpoint,
             inputs=[pending_state],
-            outputs=[pending_state, status_out, checkpoint_area, stage_label, data_json],
+            outputs=[pending_state, status_out, checkpoint_area, stage_label, data_code],
         )
         approve_btn.click(
             approve,
-            inputs=[pending_state, data_json],
+            inputs=[pending_state, data_code],
             outputs=[pending_state, status_out, checkpoint_area],
         )
 
