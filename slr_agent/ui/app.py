@@ -125,11 +125,10 @@ def build_app() -> gr.Blocks:
                 outputs=[run_id_out, start_msg],
             )
             # Poll log every 2 seconds
-            app.load(
+            gr.Timer(2).tick(
                 lambda rid, log: poll_log(rid, log),
                 inputs=[run_id_out, log_box],
                 outputs=[log_box],
-                every=2,
             )
 
         with gr.Tab("Monitor"):
@@ -175,11 +174,10 @@ def build_app_with_handler(ui_handler: UIHandler, run_id: str) -> gr.Blocks:
             ui_handler.resume({**(data or {}), "action": "approve"})
             return None, "Approved. Waiting for next checkpoint...", gr.update(visible=False)
 
-        app.load(
+        gr.Timer(1).tick(
             poll_checkpoint,
             inputs=[pending_state],
             outputs=[pending_state, checkpoint_area, stage_label, data_json, status_out],
-            every=1,
         )
         approve_btn.click(
             approve,
