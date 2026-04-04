@@ -43,9 +43,12 @@ def _search_pubmed_node(state: dict, db: Database) -> dict:
         Entrez.api_key = api_key
     Entrez.email = "slr-agent@local"
 
-    all_pmids: set[str] = set()
+    # Collect PMIDs in relevance order per query (PubMed returns best matches first).
+    # Use an ordered structure so we can cap the total while preferring top results.
+    seen: dict[str, None] = {}  # ordered set via dict keys
+    per_query_cap = max(1, max_results // max(len(pico["query_strings"]), 1))
     for query in pico["query_strings"]:
-        search_kwargs: dict = {"db": "pubmed", "term": query, "retmax": max_results}
+        search_kwargs: dict = {"db": "pubmed", "term": query, "retmax": per_query_cap}
         if date_from and date_to:
             # PubMed expects YYYY/MM/DD format
             search_kwargs["mindate"] = date_from.replace("-", "/")
@@ -54,11 +57,13 @@ def _search_pubmed_node(state: dict, db: Database) -> dict:
         handle = Entrez.esearch(**search_kwargs)
         record = Entrez.read(handle)
         handle.close()
-        all_pmids.update(record.get("IdList", []))
+        for pmid in record.get("IdList", []):
+            seen[pmid] = None
         if not api_key:
             time.sleep(0.34)  # 3 req/s limit without API key
 
-    return {"_pubmed_pmids": list(all_pmids)}
+    # Final cap: keep at most max_results unique PMIDs across all queries
+    return {"_pubmed_pmids": list(seen)[:max_results]}
 
 def _fetch_pubmed_abstracts_node(state: dict, db: Database) -> dict:
     pmids = state["_pubmed_pmids"]
