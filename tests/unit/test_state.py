@@ -60,3 +60,6 @@ def test_orchestrator_state_new_fields():
     keys = OrchestratorState.__annotations__.keys()
     assert "template" in keys
     assert "manuscript_draft_version" in keys
+    assert "date_from" in keys
+    assert "date_to" in keys
+    assert "screening_criteria" in keys

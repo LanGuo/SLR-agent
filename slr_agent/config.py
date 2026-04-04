@@ -10,6 +10,8 @@ class RunConfig(TypedDict, total=False):
     search_sources: list[Literal["pubmed", "biorxiv"]]  # default ["pubmed", "biorxiv"]
     template_path: str | None      # path to JSON schema or PDF template
     hitl_mode: Literal["cli", "ui", "none"]  # default "cli"
+    date_from: str | None          # search date range start, e.g. "2000-01-01"
+    date_to: str | None            # search date range end, e.g. "2026-12-31"
 
 DEFAULT_CONFIG: RunConfig = {
     "checkpoint_stages": [1, 3, 5],
@@ -20,4 +22,6 @@ DEFAULT_CONFIG: RunConfig = {
     "search_sources": ["pubmed", "biorxiv"],
     "template_path": None,
     "hitl_mode": "cli",
+    "date_from": "2000-01-01",
+    "date_to": None,               # None = no upper limit (current date at runtime)
 }

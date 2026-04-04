@@ -7,7 +7,7 @@ from typing import Any
 class LLMClient:
     """Thin wrapper around Ollama with retry and structured JSON output."""
 
-    def __init__(self, model: str = "gemma4:26b", max_retries: int = 3):
+    def __init__(self, model: str = "gemma3:12b", max_retries: int = 3):
         self.model = model
         self.max_retries = max_retries
 

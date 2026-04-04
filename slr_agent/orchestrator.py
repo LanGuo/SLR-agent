@@ -1,4 +1,5 @@
 # slr_agent/orchestrator.py
+import datetime
 import os
 import uuid
 from typing import Any
@@ -62,6 +63,7 @@ def create_orchestrator(
     def pico_node(state: dict) -> dict:
         run_id = state.get("run_id") or str(uuid.uuid4())
         db.ensure_run(run_id)
+        today = datetime.date.today().strftime("%Y-%m-%d")
         base = {
             **state,
             "run_id": run_id,
@@ -75,6 +77,11 @@ def create_orchestrator(
             "manuscript_path": None,
             "template": None,
             "manuscript_draft_version": 1,
+            "date_from": cfg.get("date_from", "2000-01-01"),
+            "date_to": cfg.get("date_to") or today,
+            "search_sources": cfg.get("search_sources", ["pubmed"]),
+            "max_results": cfg.get("max_results", 500),
+            "screening_criteria": None,
             "current_stage": "pico",
             "checkpoint_pending": False,
         }
@@ -83,20 +90,39 @@ def create_orchestrator(
             "pico": None,
             "validation_errors": [],
         })
-        pico_data = dict(sub_result.get("pico") or {})
-        edited = _maybe_pause(1, "pico", pico_data, run_id)
-        merged_pico = {**(sub_result.get("pico") or {}), **{
-            k: v for k, v in edited.items() if k != "action"
-        }}
-        return {**base, **sub_result, "pico": merged_pico, "current_stage": "pico_done"}
+        pico_fields = dict(sub_result.get("pico") or {})
+        # Stage 1 gate includes PICO fields AND search configuration so user can edit both
+        _SEARCH_KEYS = {"search_sources", "max_results", "date_from", "date_to", "action"}
+        gate_data = {
+            **pico_fields,
+            "search_sources": base["search_sources"],
+            "max_results": base["max_results"],
+            "date_from": base["date_from"],
+            "date_to": base["date_to"],
+        }
+        edited = _maybe_pause(1, "pico", gate_data, run_id)
+        merged_pico = {**pico_fields, **{k: v for k, v in edited.items() if k not in _SEARCH_KEYS}}
+        return {
+            **base,
+            **sub_result,
+            "pico": merged_pico,
+            "search_sources": edited.get("search_sources", base["search_sources"]),
+            "max_results": int(edited.get("max_results", base["max_results"])),
+            "date_from": edited.get("date_from", base["date_from"]),
+            "date_to": edited.get("date_to", base["date_to"]),
+            "current_stage": "pico_done",
+        }
 
     def search_node(state: dict) -> dict:
         _get_emitter(state["run_id"]).log("Searching PubMed...")
         sub_input = {
             **state,
             "pubmed_api_key": cfg.get("pubmed_api_key"),
-            "max_results": cfg.get("max_results", 500),
-            "search_sources": cfg.get("search_sources", ["pubmed"]),
+            # Use user-edited values from pico gate if present, else fall back to config
+            "max_results": state.get("max_results") or cfg.get("max_results", 500),
+            "search_sources": state.get("search_sources") or cfg.get("search_sources", ["pubmed"]),
+            "date_from": state.get("date_from") or cfg.get("date_from", "2000-01-01"),
+            "date_to": state.get("date_to") or datetime.date.today().strftime("%Y-%m-%d"),
         }
         result = search_sg.invoke(sub_input)
         run_id = state["run_id"]
@@ -116,10 +142,54 @@ def create_orchestrator(
         return {**state, **result, "current_stage": "search_done"}
 
     def screening_node(state: dict) -> dict:
-        n_papers = len(db.get_all_papers(state["run_id"]))
-        _get_emitter(state["run_id"]).log(f"Screening {n_papers} papers with LLM (may take several minutes)...")
-        result = screening_sg.invoke(state)
         run_id = state["run_id"]
+        pico = state.get("pico") or {}
+
+        # Generate explicit inclusion/exclusion criteria from PICO before screening
+        _get_emitter(run_id).log("Generating screening criteria from PICO...")
+        criteria_schema = {
+            "type": "object",
+            "properties": {
+                "inclusion_criteria": {"type": "array", "items": {"type": "string"}},
+                "exclusion_criteria": {"type": "array", "items": {"type": "string"}},
+                "study_designs": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["inclusion_criteria", "exclusion_criteria", "study_designs"],
+        }
+        criteria_result = llm.chat([{
+            "role": "user",
+            "content": (
+                "You are a systematic review methodologist. Generate explicit, specific inclusion "
+                "and exclusion criteria for screening abstracts for this systematic review.\n\n"
+                f"Population: {pico.get('population', '')}\n"
+                f"Intervention: {pico.get('intervention', '')}\n"
+                f"Comparator: {pico.get('comparator', '')}\n"
+                f"Outcome: {pico.get('outcome', '')}\n\n"
+                "Return:\n"
+                "- inclusion_criteria: list of specific eligibility criteria (study design, "
+                "population, intervention, outcome, language, publication type)\n"
+                "- exclusion_criteria: list of explicit reasons to exclude a paper\n"
+                "- study_designs: list of eligible study design types (e.g. RCT, cohort, meta-analysis)\n"
+            ),
+        }], schema=criteria_schema)
+        screening_criteria = {
+            "inclusion_criteria": criteria_result.get("inclusion_criteria", []),
+            "exclusion_criteria": criteria_result.get("exclusion_criteria", []),
+            "study_designs": criteria_result.get("study_designs", []),
+        }
+
+        # Pre-screening criteria gate (fires before any LLM screening)
+        if 3 in checkpoint_stages:
+            _get_emitter(run_id).log("Review screening criteria before screening begins...")
+            criteria_edited = _broker.pause(3, "screening_criteria", screening_criteria)
+            screening_criteria = {k: v for k, v in criteria_edited.items() if k != "action"}
+
+        # Save criteria to disk with distinct filename
+        _get_emitter(run_id).emit(3, screening_criteria, name="screening_criteria")
+
+        n_papers = len(db.get_all_papers(run_id))
+        _get_emitter(run_id).log(f"Screening {n_papers} papers with LLM (may take several minutes)...")
+        result = screening_sg.invoke({**state, "screening_criteria": screening_criteria})
         papers = db.get_papers_by_decision(run_id, "include")
         excluded = db.get_papers_by_decision(run_id, "exclude")
         paper_list = [
@@ -139,7 +209,7 @@ def create_orchestrator(
                     record["screening_decision"] = p["decision"]
                     record["screening_reason"] = p.get("reason", "User override")
                     db.upsert_paper(record)
-        return {**state, **result, "current_stage": "screening_done"}
+        return {**state, **result, "screening_criteria": screening_criteria, "current_stage": "screening_done"}
 
     def fulltext_node(state: dict) -> dict:
         result = fulltext_sg.invoke(state)

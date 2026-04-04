@@ -18,7 +18,7 @@ def db_with_papers(db, sample_paper):
 
 def test_screening_includes_and_excludes(db_with_papers, mock_llm):
     mock_llm.register(
-        "screen the following abstracts",
+        "You are screening abstracts for a systematic review",
         {
             "decisions": [
                 {"pmid": "99999", "decision": "include", "reason": "Matches PICO criteria: RCT, hypertension, aspirin"},

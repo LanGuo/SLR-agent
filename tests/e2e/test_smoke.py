@@ -1,6 +1,6 @@
 """
 End-to-end smoke test. Requires:
-- Ollama running with gemma4:26b
+- Ollama running with gemma3:12b
 - Internet access (PubMed)
 
 Run manually: pytest tests/e2e/test_smoke.py -v -s
@@ -19,7 +19,7 @@ def orchestrator(tmp_path):
     from slr_agent.config import RunConfig
     from slr_agent.orchestrator import create_orchestrator
     db = Database(str(tmp_path / "smoke.db"))
-    llm = LLMClient(model="gemma4:26b")
+    llm = LLMClient(model="gemma3:12b")
     config = RunConfig(
         checkpoint_stages=[],        # fully automated for smoke test
         fetch_fulltext=False,

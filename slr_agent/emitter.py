@@ -36,9 +36,9 @@ class ProgressEmitter:
         if self._gradio_queue is not None:
             self._gradio_queue.put(message)
 
-    def emit(self, stage: int, data: dict) -> None:
+    def emit(self, stage: int, data: dict, name: str | None = None) -> None:
         """Write stage data to disk and notify sinks."""
-        name = _STAGE_NAMES.get(stage, f"stage_{stage}")
+        name = name or _STAGE_NAMES.get(stage, f"stage_{stage}")
         path = os.path.join(self.output_dir, self.run_id, f"stage_{stage}_{name}.json")
         with open(path, "w") as f:
             json.dump(data, f, indent=2, default=str)

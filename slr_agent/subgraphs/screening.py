@@ -14,37 +14,54 @@ def _screen_abstracts_node(state: dict, db: Database, llm) -> dict:
 
     n_included = n_excluded = n_uncertain = 0
 
+    # Build criteria text once — same for every batch
+    criteria = state.get("screening_criteria") or {}
+    criteria_text = ""
+    if criteria.get("study_designs"):
+        criteria_text += f"Eligible study designs: {', '.join(criteria['study_designs'])}\n"
+    if criteria.get("inclusion_criteria"):
+        criteria_text += "Inclusion criteria:\n" + "".join(
+            f"  - {c}\n" for c in criteria["inclusion_criteria"]
+        )
+    if criteria.get("exclusion_criteria"):
+        criteria_text += "Exclusion criteria:\n" + "".join(
+            f"  - {c}\n" for c in criteria["exclusion_criteria"]
+        )
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "decisions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "pmid": {"type": "string"},
+                        "decision": {"type": "string", "enum": ["include", "exclude", "uncertain"]},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["pmid", "decision", "reason"],
+                },
+            }
+        },
+        "required": ["decisions"],
+    }
+
     for i in range(0, len(papers), _BATCH_SIZE):
         batch = papers[i : i + _BATCH_SIZE]
         batch_text = "\n\n".join(
             f"[PMID {p['pmid']}]\nTitle: {p['title']}\nAbstract: {p['abstract']}"
             for p in batch
         )
-        schema = {
-            "type": "object",
-            "properties": {
-                "decisions": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "pmid": {"type": "string"},
-                            "decision": {"type": "string", "enum": ["include", "exclude", "uncertain"]},
-                            "reason": {"type": "string"},
-                        },
-                        "required": ["pmid", "decision", "reason"],
-                    },
-                }
-            },
-            "required": ["decisions"],
-        }
+
         result = llm.chat([{
             "role": "user",
             "content": (
                 f"You are screening abstracts for a systematic review.\n"
                 f"PICO: P={pico['population']}, I={pico['intervention']}, "
                 f"C={pico['comparator']}, O={pico['outcome']}\n\n"
-                f"Please screen the following abstracts. For each, decide include/exclude/uncertain "
+                f"{criteria_text}\n"
+                f"For each abstract below, decide include/exclude/uncertain "
                 f"and provide a brief reason referencing the abstract text.\n\n{batch_text}"
             ),
         }], schema=schema)

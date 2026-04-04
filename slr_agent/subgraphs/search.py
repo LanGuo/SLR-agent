@@ -33,6 +33,8 @@ def _search_pubmed_node(state: dict, db: Database) -> dict:
     api_key = state.get("pubmed_api_key")
     max_results = state.get("max_results", 500)
     run_id = state["run_id"]
+    date_from = state.get("date_from")  # e.g. "2000-01-01"
+    date_to = state.get("date_to")      # e.g. "2026-12-31"
 
     # Ensure the run exists in the DB before inserting papers (FK constraint)
     db.ensure_run(run_id)
@@ -43,7 +45,13 @@ def _search_pubmed_node(state: dict, db: Database) -> dict:
 
     all_pmids: set[str] = set()
     for query in pico["query_strings"]:
-        handle = Entrez.esearch(db="pubmed", term=query, retmax=max_results)
+        search_kwargs: dict = {"db": "pubmed", "term": query, "retmax": max_results}
+        if date_from and date_to:
+            # PubMed expects YYYY/MM/DD format
+            search_kwargs["mindate"] = date_from.replace("-", "/")
+            search_kwargs["maxdate"] = date_to.replace("-", "/")
+            search_kwargs["datetype"] = "pdat"
+        handle = Entrez.esearch(**search_kwargs)
         record = Entrez.read(handle)
         handle.close()
         all_pmids.update(record.get("IdList", []))
@@ -96,11 +104,13 @@ def _search_biorxiv_node(state: dict, db: Database) -> dict:
     """
     run_id = state["run_id"]
     max_results = state.get("max_results", 500)
+    date_from = state.get("date_from", "2000-01-01")
+    date_to = state.get("date_to") or "2099-12-31"
     biorxiv_count = 0
 
     try:
         resp = httpx.get(
-            "https://api.biorxiv.org/details/biorxiv/2023-01-01/2026-12-31/0/json",
+            f"https://api.biorxiv.org/details/biorxiv/{date_from}/{date_to}/0/json",
             timeout=30,
         )
         data = resp.json()
