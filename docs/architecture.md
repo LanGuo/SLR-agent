@@ -41,7 +41,8 @@ Three cross-cutting components sit alongside the pipeline:
                          │
 ┌────────────────────────▼────────────────────────────┐
 │                   Infrastructure                     │
-│  Ollama (Gemma 4 26B MoE)   SQLite (checkpointer    │
+│  Ollama (gemma3:12b default SQLite (checkpointer    │
+│  / gemma4:27b recommended)                         │
 │  PubMed Entrez API          + paper records)        │
 │  bioRxiv REST API           Pandoc (→ .docx)        │
 │  PyMuPDF (PDF parsing)      rapidfuzz (grounding)   │

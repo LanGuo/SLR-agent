@@ -1,8 +1,8 @@
 # SLR Agent
 
-A general-purpose Systematic Literature Review (SLR) agent that takes any research question as input, runs a PRISMA-compliant pipeline, and produces a structured manuscript. Built for the Kaggle Gemma 4 Good Hackathon.
+A general-purpose Systematic Literature Review (SLR) agent that takes any research question as input, runs a PRISMA-compliant pipeline, and produces a structured manuscript.
 
-Runs entirely locally on a Mac Mini using **Gemma 4 26B MoE via Ollama**. Orchestrated with **LangGraph** hierarchical subgraphs for explicit state machine control, resumability, and full audit trails.
+Runs entirely locally using **Gemma 3 12B via Ollama** (default, ~8GB RAM). Orchestrated with **LangGraph** hierarchical subgraphs for explicit state machine control, resumability, and full audit trails. Designed for Gemma 4 26B MoE (~18GB RAM) for best results.
 
 ---
 
@@ -127,7 +127,7 @@ outputs/<run_id>/
 
 | Component | Technology |
 |---|---|
-| LLM runtime | Ollama — Gemma 4 26B MoE (4-bit, ~18GB RAM) |
+| LLM runtime | Ollama — Gemma 3 12B (default, ~8GB RAM); Gemma 4 26B MoE (4-bit, ~18GB RAM) for best results |
 | Orchestration | LangGraph hierarchical subgraphs + SQLite checkpointer |
 | Search | PubMed Entrez (Biopython) + bioRxiv REST API (httpx) |
 | PDF parsing | PyMuPDF |
