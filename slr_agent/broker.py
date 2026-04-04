@@ -1,8 +1,5 @@
 import json
-import os
 import queue
-import subprocess
-import tempfile
 import threading
 from typing import Any
 
@@ -43,36 +40,40 @@ class CLIHandler:
 
         while True:
             choice = click.prompt(
-                "[A]pprove  [E]dit (opens $EDITOR)  [S]kip",
+                "[A]pprove  [E]dit fields inline  [S]kip",
                 default="A",
             ).strip().upper()
 
             if choice in ("A", "S"):
                 return {**data, "action": "approve"}
             if choice == "E":
-                edited = self._open_editor(data)
-                if edited is not None:
-                    return {**edited, "action": "approve"}
-                click.echo("Editor returned invalid JSON — try again.")
+                edited = self._edit_inline(data)
+                return {**edited, "action": "approve"}
 
-    def _open_editor(self, data: dict) -> dict | None:
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
-            json.dump(data, f, indent=2, default=str)
-            path = f.name
-        editor = os.environ.get("EDITOR", "vi")
-        try:
-            subprocess.run([editor, path], check=True)
-            with open(path) as f:
-                return json.load(f)
-        except (subprocess.CalledProcessError, json.JSONDecodeError, OSError):
-            return None
-        finally:
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
+    def _edit_inline(self, data: dict) -> dict:
+        """Prompt for each field; Enter keeps current value."""
+        click.echo("\nEdit fields (press Enter to keep current value):\n")
+        result = {}
+        for key, value in data.items():
+            if isinstance(value, list):
+                click.echo(f"  {key} (list, one item per line; blank line to finish):")
+                for i, item in enumerate(value):
+                    click.echo(f"    [{i}] {item}")
+                click.echo("  Enter new items (blank line = keep as-is):")
+                new_items = []
+                while True:
+                    line = click.prompt("   +", default="", show_default=False)
+                    if not line:
+                        break
+                    new_items.append(line)
+                result[key] = new_items if new_items else value
+            elif isinstance(value, dict):
+                click.echo(f"  {key}: (dict — skipped, approve to keep)")
+                result[key] = value
+            else:
+                new_val = click.prompt(f"  {key}", default=str(value), show_default=True)
+                result[key] = new_val
+        return result
 
 
 class UIHandler:
