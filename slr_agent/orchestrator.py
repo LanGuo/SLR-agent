@@ -175,6 +175,8 @@ def create_orchestrator(
                 synthesis_text = f.read()
         emit_data = {"synthesis_path": synthesis_path, "preview": synthesis_text[:500]}
         _maybe_pause(6, "synthesis", emit_data, run_id)
+        # Note: stage 6 edits (synthesis text) are written directly to synthesis_path
+        # by the Gradio panel's on_approve handler; the broker return is not needed here.
         return {**state, **result, "current_stage": "synthesis_done"}
 
     def manuscript_node(state: dict) -> dict:
