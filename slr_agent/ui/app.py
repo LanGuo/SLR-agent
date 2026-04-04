@@ -1,11 +1,11 @@
 # slr_agent/ui/app.py
 import queue
 import threading
+import uuid
 import gradio as gr
-from slr_agent.broker import UIHandler
+from slr_agent.broker import CheckpointBroker, NoOpHandler, UIHandler
 from slr_agent.db import Database
 from slr_agent.llm import LLMClient
-from slr_agent.broker import CheckpointBroker, NoOpHandler
 from slr_agent.config import DEFAULT_CONFIG, RunConfig
 from slr_agent.emitter import ProgressEmitter
 from slr_agent.orchestrator import create_orchestrator
@@ -27,14 +27,13 @@ def _make_config(fetch_fulltext: bool, checkpoint_stages_str: str, template_path
         pubmed_api_key=None,
         max_results=500,
         search_sources=DEFAULT_CONFIG["search_sources"],
-        template_path=template_path or None,
+        template_path=template_path,
         hitl_mode="ui",
     )
 
 
 def launch_run(question: str, fetch_fulltext: bool, checkpoint_stages_str: str, template_file):
     """Start a pipeline run in a background thread (no HITL — auto-approve)."""
-    import uuid
     run_id = str(uuid.uuid4())[:8]
     template_path = template_file.name if template_file is not None else None
     config = _make_config(fetch_fulltext, checkpoint_stages_str, template_path)
@@ -156,6 +155,9 @@ def build_app_with_handler(ui_handler: UIHandler, run_id: str) -> gr.Blocks:
             status_out = gr.Textbox(label="Status", value="Waiting for checkpoint...", interactive=False)
 
         def poll_checkpoint(pending):
+            if pending is not None:
+                # Already holding a checkpoint — don't poll; let the user approve first
+                return gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
             cp = ui_handler.get_pending(timeout=0.1)
             if cp is None:
                 return pending, gr.update(visible=False), "", None, "Waiting for checkpoint..."
