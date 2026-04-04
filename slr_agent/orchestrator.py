@@ -55,6 +55,8 @@ def create_orchestrator(
             "manuscript_path": None,
             "current_stage": "pico",
             "checkpoint_pending": False,
+            "template": None,
+            "manuscript_draft_version": 1,
         }
         sub_result = pico_sg.invoke({
             "raw_question": state["raw_question"],
