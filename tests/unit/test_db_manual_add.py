@@ -51,6 +51,8 @@ def test_add_paper_from_pdf_inserts_record(tmp_path):
         mock_page = MagicMock()
         mock_page.get_text.return_value = "Full text of paper about aspirin..."
         mock_doc.__iter__ = lambda s: iter([mock_page])
+        mock_doc.__enter__.return_value = mock_doc
+        mock_doc.__exit__.return_value = False
         mock_fitz.open.return_value = mock_doc
 
         paper = db.add_paper_from_pdf(

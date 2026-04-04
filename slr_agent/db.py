@@ -187,8 +187,10 @@ class Database:
         Entrez.email = "slr-agent@local"
         try:
             handle = Entrez.efetch(db="pubmed", id=pmid, rettype="xml", retmode="xml")
-            records = Entrez.read(handle)
-            handle.close()
+            try:
+                records = Entrez.read(handle)
+            finally:
+                handle.close()
             articles = records.get("PubmedArticle", [])
             if not articles:
                 return None
@@ -196,7 +198,8 @@ class Database:
             art = citation.get("Article", {})
             title = str(art.get("ArticleTitle", ""))
             abstract_obj = art.get("Abstract", {})
-            abstract = str(abstract_obj.get("AbstractText", "")) if abstract_obj else ""
+            abstract_raw = abstract_obj.get("AbstractText", "") if abstract_obj else ""
+            abstract = " ".join(str(s) for s in abstract_raw) if isinstance(abstract_raw, list) else str(abstract_raw)
         except Exception:
             return None
 
@@ -225,29 +228,29 @@ class Database:
         self, run_id: str, pdf_path: str, metadata: dict
     ) -> "PaperRecord":
         """Extract fulltext from a PDF and insert as a manually added paper."""
-        doc = fitz.open(pdf_path)
-        fulltext = "\n".join(page.get_text() for page in doc)
+        with fitz.open(pdf_path) as doc:
+            fulltext = "\n".join(page.get_text() for page in doc)
 
-        paper = PaperRecord(
-            pmid=metadata.get("pmid", f"pdf:{os.path.basename(pdf_path)}"),
-            run_id=run_id,
-            title=metadata.get("title", os.path.basename(pdf_path)),
-            abstract=metadata.get("abstract", fulltext[:500]),
-            fulltext=fulltext,
-            source="manual",
-            screening_decision="uncertain",
-            screening_reason="Manually uploaded PDF",
-            extracted_data={},
-            grade_score=GRADEScore(
-                certainty="low", risk_of_bias="high",
-                inconsistency="no", indirectness="no",
-                imprecision="no", rationale="Not yet assessed",
-            ),
-            provenance=[],
-            quarantined_fields=[],
-        )
-        self.upsert_paper(paper)
-        return paper
+            paper = PaperRecord(
+                pmid=metadata.get("pmid", f"pdf:{os.path.basename(pdf_path)}"),
+                run_id=run_id,
+                title=metadata.get("title", os.path.basename(pdf_path)),
+                abstract=metadata.get("abstract", fulltext[:500]),
+                fulltext=fulltext,
+                source="manual",
+                screening_decision="uncertain",
+                screening_reason="Manually uploaded PDF",
+                extracted_data={},
+                grade_score=GRADEScore(
+                    certainty="low", risk_of_bias="high",
+                    inconsistency="no", indirectness="no",
+                    imprecision="no", rationale="Not yet assessed",
+                ),
+                provenance=[],
+                quarantined_fields=[],
+            )
+            self.upsert_paper(paper)
+            return paper
 
     def ensure_run(self, run_id: str) -> None:
         with self.connect() as conn:
