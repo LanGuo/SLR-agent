@@ -86,7 +86,14 @@ def _fetch_pubmed_abstracts_node(state: dict, db: Database) -> dict:
             art = citation.get("Article", {})
             title = str(art.get("ArticleTitle", ""))
             abstract_obj = art.get("Abstract", {})
-            abstract = str(abstract_obj.get("AbstractText", "")) if abstract_obj else ""
+            abstract_raw = abstract_obj.get("AbstractText", "") if abstract_obj else ""
+            # AbstractText is a list of StringElements for structured abstracts
+            # (those with labeled sections like PURPOSE/METHODS/RESULTS)
+            abstract = (
+                " ".join(str(s) for s in abstract_raw)
+                if isinstance(abstract_raw, list)
+                else str(abstract_raw)
+            )
 
             db.upsert_paper(PaperRecord(
                 pmid=pmid, run_id=run_id, title=title, abstract=abstract,
