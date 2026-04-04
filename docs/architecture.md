@@ -260,11 +260,32 @@ extracted_value ─── fuzzy_match ──▶ source_text
 - `efetch` in batches of 200 to retrieve titles + abstracts
 - Rate limiting: 3 req/s without API key, 10 req/s with key
 
+#### Result cap and relevance ordering
+
+PubMed returns results in **relevance order** by default (best matches first within each query). The cap is distributed evenly across query strings to keep the total within `max_results`:
+
+```
+per_query_cap = max_results // len(query_strings)
+```
+
+For example, `max_results=50` with 4 query strings → 12–13 results per query. After merging (deduplicating by PMID), a final slice enforces the hard cap:
+
+```
+all_pmids = list(ordered_union_of_all_queries)[:max_results]
+```
+
+This means the cap is applied to the **total** retrieved, not per-query, and the most relevant papers from each query strand are preferred over less relevant ones. There is no cross-query re-ranking — papers are ordered by which query retrieved them first, then by PubMed relevance within that query.
+
 ### bioRxiv
 
 - Date-range API: `https://api.biorxiv.org/details/biorxiv/{date_from}/{date_to}/0/json`
-- No keyword search available — fetches recent preprints and relies on Stage 3 LLM screening to filter by PICO relevance
+- No keyword search API — fetches recent preprints by date range, capped at `max_results`
+- PICO relevance filtering happens in Stage 3 screening (LLM-based), not at retrieval time
 - Failures (network, timeout) are silently skipped; pipeline continues with PubMed results only
+
+#### Combined volume
+
+With both sources enabled, the total paper count entering screening can be up to `2 × max_results` (PubMed cap + bioRxiv cap independently). Set `search_sources: ["pubmed"]` to stay within `max_results` total.
 
 ### Search configuration (user-editable at Stage 1 gate)
 
