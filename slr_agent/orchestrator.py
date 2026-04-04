@@ -128,17 +128,32 @@ def create_orchestrator(
         run_id = state["run_id"]
         counts = result.get("search_counts", {})
         papers = db.get_all_papers(run_id)
-        paper_list = [{"pmid": p["pmid"], "title": p["title"], "source": p["source"]} for p in papers]
-        emit_data = {**dict(counts or {}), "papers": paper_list}
+        paper_list = [
+            {"pmid": p["pmid"], "title": p["title"], "source": p["source"], "excluded": False}
+            for p in papers
+        ]
+        emit_data = {
+            **dict(counts or {}),
+            "_instructions": (
+                "Set excluded=true on any paper to remove it before screening. "
+                "To add a paper by PMID set manual_add=true and fill pmid+title. "
+                "Example add entry: {\"pmid\":\"12345678\",\"title\":\"\",\"excluded\":false,\"manual_add\":true}"
+            ),
+            "papers": paper_list,
+        }
         edited = _maybe_pause(2, "search", emit_data, run_id)
-        # Apply manual exclusions from gate
+        existing_pmids = {p["pmid"] for p in db.get_all_papers(run_id)}
         for p in edited.get("papers", []):
+            pmid = p.get("pmid", "")
             if p.get("excluded"):
-                paper = db.get_paper(run_id, p["pmid"])
+                paper = db.get_paper(run_id, pmid)
                 if paper:
                     paper["screening_decision"] = "excluded_manual"
                     paper["screening_reason"] = "Excluded by user at search gate"
                     db.upsert_paper(paper)
+            elif p.get("manual_add") and pmid and pmid not in existing_pmids:
+                _get_emitter(run_id).log(f"Fetching manually added paper: {pmid}")
+                db.add_paper_from_pmid(run_id, pmid, api_key=cfg.get("pubmed_api_key"))
         return {**state, **result, "current_stage": "search_done"}
 
     def screening_node(state: dict) -> dict:
