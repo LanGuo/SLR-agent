@@ -207,12 +207,13 @@ def create_orchestrator(
         result = screening_sg.invoke({**state, "screening_criteria": screening_criteria})
         papers = db.get_papers_by_decision(run_id, "include")
         excluded = db.get_papers_by_decision(run_id, "exclude")
+        uncertain = db.get_papers_by_decision(run_id, "uncertain")
         paper_list = [
             {"pmid": p["pmid"], "title": p["title"],
              "abstract": (p["abstract"] or "")[:300],
              "decision": p["screening_decision"],
              "reason": p["screening_reason"]}
-            for p in papers + excluded
+            for p in papers + excluded + uncertain
         ]
         emit_data = {**dict(result.get("screening_counts") or {}), "papers": paper_list}
         edited = _maybe_pause(3, "screening", emit_data, run_id)

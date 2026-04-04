@@ -4,7 +4,7 @@ from slr_agent.db import Database
 from slr_agent.grounding import ExtractionGrounder
 from slr_agent.state import ScreeningCounts
 
-_BATCH_SIZE = 20   # abstracts per LLM call
+_BATCH_SIZE = 5    # abstracts per LLM call — smaller batches = shorter prompts = more reliable JSON
 
 def _screen_abstracts_node(state: dict, db: Database, llm) -> dict:
     run_id = state["run_id"]
@@ -102,11 +102,17 @@ def _screen_abstracts_node(state: dict, db: Database, llm) -> dict:
             else:
                 n_uncertain += 1
 
+    # Count papers the LLM never returned a decision for (stayed at default "uncertain").
+    # These are real gaps — not explicit LLM "uncertain" votes — so surface them in counts.
+    n_no_response = sum(
+        1 for p in db.get_all_papers(run_id)
+        if p["screening_decision"] == "uncertain" and not p.get("screening_reason")
+    )
     return {
         "screening_counts": ScreeningCounts(
             n_included=n_included,
             n_excluded=n_excluded,
-            n_uncertain=n_uncertain,
+            n_uncertain=n_uncertain + n_no_response,
         )
     }
 
