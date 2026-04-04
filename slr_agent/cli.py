@@ -1,5 +1,8 @@
 # slr_agent/cli.py
+import glob as _glob
+import json
 import os
+import threading
 import uuid
 import click
 from slr_agent.broker import CheckpointBroker, CLIHandler, NoOpHandler, UIHandler
@@ -99,7 +102,6 @@ def run(question, no_fulltext, no_checkpoints, hitl, max_results, api_key, templ
 
 def _launch_gradio_with_handler(ui_handler: UIHandler, run_id: str) -> None:
     """Launch Gradio server in background thread for --hitl ui mode."""
-    import threading
     try:
         from slr_agent.ui.app import build_app_with_handler
         def _serve():
@@ -116,13 +118,16 @@ def _launch_gradio_with_handler(ui_handler: UIHandler, run_id: str) -> None:
 @click.option("--edits", default=None, help="JSON string of state edits to apply")
 def resume(run_id, edits):
     """Resume a paused or failed run."""
-    import json
     broker = CheckpointBroker(CLIHandler())
     emitter = ProgressEmitter(output_dir=_OUTPUT_DIR, run_id=run_id, echo=click.echo)
     orchestrator, db = _build_orchestrator(DEFAULT_CONFIG, broker, emitter)
     thread_config = {"configurable": {"thread_id": run_id}}
     if edits:
-        orchestrator.update_state(thread_config, json.loads(edits))
+        try:
+            orchestrator.update_state(thread_config, json.loads(edits))
+        except json.JSONDecodeError as e:
+            click.echo(f"Invalid JSON in --edits: {e}", err=True)
+            raise SystemExit(1)
     try:
         result = orchestrator.invoke(None, config=thread_config)
         if result.get("manuscript_path"):
@@ -149,7 +154,6 @@ def status(run_id):
     click.echo(f"  Quarantined fields: {len(quarantine)}")
     stage_dir = os.path.join(_OUTPUT_DIR, run_id)
     if os.path.isdir(stage_dir):
-        import glob as _glob
         stage_files = _glob.glob(os.path.join(stage_dir, "stage_*.json"))
         click.echo(f"  Stage files: {len(stage_files)} saved to {stage_dir}/")
 
@@ -158,7 +162,6 @@ def status(run_id):
 @click.argument("run_id")
 def export(run_id):
     """Export the manuscript for a completed run."""
-    import glob as _glob
     run_dir = os.path.join(_OUTPUT_DIR, run_id)
     files = _glob.glob(os.path.join(run_dir, f"{run_id}_manuscript*"))
     if not files:
