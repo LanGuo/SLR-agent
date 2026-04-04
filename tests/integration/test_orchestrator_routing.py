@@ -4,6 +4,7 @@ from unittest.mock import patch, MagicMock
 from slr_agent.orchestrator import create_orchestrator
 from slr_agent.llm import MockLLM
 from slr_agent.config import RunConfig
+from slr_agent.template import DEFAULT_PRISMA_TEMPLATE
 
 
 def make_llm():
@@ -16,9 +17,9 @@ def make_llm():
     llm.register("generate PubMed search query strings", {"query_strings": ["aspirin[tiab]"]})
     llm.register("screen the following abstracts", {"decisions": []})
     llm.register("synthesise the evidence", {"claims": [], "narrative": "No evidence found."})
-    llm.register("write the Methods section", {"text": "Methods."})
-    llm.register("write the Results section", {"text": "Results."})
-    llm.register("write the Discussion section", {"text": "Discussion."})
+    for section in DEFAULT_PRISMA_TEMPLATE["sections"]:
+        llm.register(f"write the {section['name']} section", {"text": f"{section['name']} text."})
+    llm.register("score the following systematic review draft", {"scores": []})
     return llm
 
 

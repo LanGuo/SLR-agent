@@ -4,22 +4,31 @@ import pytest
 from unittest.mock import patch
 from slr_agent.subgraphs.manuscript import create_manuscript_subgraph
 from slr_agent.llm import MockLLM
+from slr_agent.state import PICOResult
+from slr_agent.template import DEFAULT_PRISMA_TEMPLATE
 
 
-def test_manuscript_writes_markdown(db, sample_paper, mock_llm, tmp_path):
+def _make_llm():
+    llm = MockLLM()
+    # Section generation — one response matched per section name
+    for section in DEFAULT_PRISMA_TEMPLATE["sections"]:
+        name = section["name"]
+        llm.register(f"write the {name} section", {"text": f"Content of {name}."})
+    # Rubric scoring
+    llm.register("score the following systematic review draft", {
+        "scores": [{"criterion": "Names all databases", "score": "met", "explanation": "PubMed named."}]
+    })
+    return llm
+
+
+def test_manuscript_writes_markdown(db, tmp_path):
     db.ensure_run("run-test")
-    db.upsert_paper(sample_paper)
     synthesis_path = str(tmp_path / "synthesis.md")
     with open(synthesis_path, "w") as f:
         f.write("# Synthesis\n\nAspirin reduces SBP by 8 mmHg.")
 
-    mock_llm.register("write the Methods section", {"text": "We searched PubMed using PICO-derived queries."})
-    mock_llm.register("write the Results section", {"text": "One RCT (n=500) was included."})
-    mock_llm.register("write the Discussion section", {"text": "Aspirin appears effective for hypertension."})
-
     with patch("slr_agent.subgraphs.manuscript.run_pandoc", return_value=None):
-        graph = create_manuscript_subgraph(db=db, llm=mock_llm, output_dir=str(tmp_path))
-        from slr_agent.state import PICOResult
+        graph = create_manuscript_subgraph(db=db, llm=_make_llm(), output_dir=str(tmp_path))
         result = graph.invoke({
             "run_id": "run-test",
             "pico": PICOResult(
@@ -31,6 +40,8 @@ def test_manuscript_writes_markdown(db, sample_paper, mock_llm, tmp_path):
             "synthesis_path": synthesis_path,
             "screening_counts": {"n_included": 1, "n_excluded": 9, "n_uncertain": 0},
             "manuscript_path": None,
+            "template": None,
+            "manuscript_draft_version": 0,
         })
 
     assert result["manuscript_path"] is not None
@@ -38,3 +49,72 @@ def test_manuscript_writes_markdown(db, sample_paper, mock_llm, tmp_path):
     content = open(result["manuscript_path"]).read()
     assert "Methods" in content
     assert "Results" in content
+
+
+def test_manuscript_uses_custom_template(db, tmp_path):
+    db.ensure_run("run-test2")
+    synthesis_path = str(tmp_path / "synthesis.md")
+    with open(synthesis_path, "w") as f:
+        f.write("Narrative.")
+
+    custom_template = {
+        "sections": [
+            {"name": "Background", "instructions": "Describe rationale.", "rubric_criteria": []},
+            {"name": "Methods", "instructions": "Detail methods.", "rubric_criteria": []},
+        ],
+        "style_notes": "",
+    }
+
+    llm = MockLLM()
+    llm.register("write the Background section", {"text": "Background content."})
+    llm.register("write the Methods section", {"text": "Methods content."})
+    llm.register("score the following systematic review draft", {"scores": []})
+
+    with patch("slr_agent.subgraphs.manuscript.run_pandoc", return_value=None):
+        graph = create_manuscript_subgraph(db=db, llm=llm, output_dir=str(tmp_path))
+        result = graph.invoke({
+            "run_id": "run-test2",
+            "pico": PICOResult(
+                population="adults", intervention="aspirin",
+                comparator="placebo", outcome="bp",
+                query_strings=[], source_language="en",
+                search_language="en", output_language="en",
+            ),
+            "synthesis_path": synthesis_path,
+            "screening_counts": None,
+            "manuscript_path": None,
+            "template": custom_template,
+            "manuscript_draft_version": 0,
+        })
+
+    content = open(result["manuscript_path"]).read()
+    assert "Background" in content
+    assert "Methods" in content
+
+
+def test_manuscript_rubric_saved(db, tmp_path):
+    db.ensure_run("run-test3")
+    synthesis_path = str(tmp_path / "synthesis.md")
+    with open(synthesis_path, "w") as f:
+        f.write("Narrative.")
+
+    llm = _make_llm()
+    with patch("slr_agent.subgraphs.manuscript.run_pandoc", return_value=None):
+        graph = create_manuscript_subgraph(db=db, llm=llm, output_dir=str(tmp_path))
+        result = graph.invoke({
+            "run_id": "run-test3",
+            "pico": PICOResult(
+                population="adults", intervention="aspirin",
+                comparator="placebo", outcome="bp",
+                query_strings=[], source_language="en",
+                search_language="en", output_language="en",
+            ),
+            "synthesis_path": synthesis_path,
+            "screening_counts": None,
+            "manuscript_path": None,
+            "template": None,
+            "manuscript_draft_version": 0,
+        })
+
+    assert "manuscript_rubric" in result
+    assert "scores" in result["manuscript_rubric"]
