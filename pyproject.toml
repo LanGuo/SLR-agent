@@ -7,8 +7,9 @@ name = "slr-agent"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "langgraph>=0.2.0",
-    "langchain-community>=0.2.0",
+    "langgraph>=1.0.0",
+    "langgraph-checkpoint-sqlite>=2.0.0",
+    "langchain-community>=0.4.0",
     "biopython>=1.83",
     "pymupdf>=1.24.0",
     "rapidfuzz>=3.6.0",
@@ -26,6 +27,7 @@ slr = "slr_agent.cli:cli"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 addopts = "--tb=short -m 'not e2e'"
 markers = ["e2e: end-to-end tests requiring Ollama and internet (run manually)"]
