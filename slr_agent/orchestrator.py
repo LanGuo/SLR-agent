@@ -244,8 +244,10 @@ def create_orchestrator(
 
     if db_path:
         try:
+            import sqlite3
             from langgraph.checkpoint.sqlite import SqliteSaver
-            checkpointer = SqliteSaver.from_conn_string(db_path)
+            conn = sqlite3.connect(db_path, check_same_thread=False)
+            checkpointer = SqliteSaver(conn)
             return builder.compile(checkpointer=checkpointer)
         except ImportError:
             import warnings
