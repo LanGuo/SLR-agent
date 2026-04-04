@@ -91,6 +91,7 @@ def create_orchestrator(
         return {**base, **sub_result, "pico": merged_pico, "current_stage": "pico_done"}
 
     def search_node(state: dict) -> dict:
+        _get_emitter(state["run_id"]).log("Searching PubMed...")
         sub_input = {
             **state,
             "pubmed_api_key": cfg.get("pubmed_api_key"),
@@ -115,6 +116,8 @@ def create_orchestrator(
         return {**state, **result, "current_stage": "search_done"}
 
     def screening_node(state: dict) -> dict:
+        n_papers = len(db.get_all_papers(state["run_id"]))
+        _get_emitter(state["run_id"]).log(f"Screening {n_papers} papers with LLM (may take several minutes)...")
         result = screening_sg.invoke(state)
         run_id = state["run_id"]
         papers = db.get_papers_by_decision(run_id, "include")
@@ -145,6 +148,8 @@ def create_orchestrator(
         return {**state, **result, "current_stage": "fulltext_done"}
 
     def extraction_node(state: dict) -> dict:
+        n_included = len(db.get_papers_by_decision(state["run_id"], "include"))
+        _get_emitter(state["run_id"]).log(f"Extracting data from {n_included} included papers...")
         result = extraction_sg.invoke(state)
         run_id = state["run_id"]
         papers = db.get_papers_by_decision(run_id, "include")
@@ -166,6 +171,7 @@ def create_orchestrator(
         return {**state, **result, "current_stage": "extraction_done"}
 
     def synthesis_node(state: dict) -> dict:
+        _get_emitter(state["run_id"]).log("Synthesising evidence...")
         result = synthesis_sg.invoke(state)
         run_id = state["run_id"]
         synthesis_path = result.get("synthesis_path", "")
@@ -181,6 +187,7 @@ def create_orchestrator(
 
     def manuscript_node(state: dict) -> dict:
         run_id = state["run_id"]
+        _get_emitter(run_id).log("Generating manuscript draft...")
         # Load template if path provided
         template = state.get("template")
         template_path = cfg.get("template_path")

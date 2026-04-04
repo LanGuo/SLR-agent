@@ -30,6 +30,12 @@ class ProgressEmitter:
         self._gradio_queue = gradio_queue
         os.makedirs(os.path.join(output_dir, run_id), exist_ok=True)
 
+    def log(self, message: str) -> None:
+        """Emit a freeform status message without writing to disk."""
+        self._echo(message)
+        if self._gradio_queue is not None:
+            self._gradio_queue.put(message)
+
     def emit(self, stage: int, data: dict) -> None:
         """Write stage data to disk and notify sinks."""
         name = _STAGE_NAMES.get(stage, f"stage_{stage}")
