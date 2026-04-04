@@ -146,26 +146,28 @@ def build_app_with_handler(ui_handler: UIHandler, run_id: str) -> gr.Blocks:
         gr.Markdown(f"# SLR Agent Checkpoint Review\nRun: `{run_id}`")
 
         pending_state = gr.State(None)
-        checkpoint_area = gr.Column(visible=False)
-        with checkpoint_area:
+        # Status shown at all times (outside the hidden panel)
+        status_out = gr.Textbox(label="Status", value="Waiting for pipeline checkpoint...", interactive=False)
+
+        # gr.Group supports visibility toggling reliably in Gradio 6
+        with gr.Group(visible=False) as checkpoint_area:
             stage_label = gr.Markdown("## Checkpoint")
             data_json = gr.JSON(label="Stage Data")
             approve_btn = gr.Button("Approve & Continue", variant="primary")
-            status_out = gr.Textbox(label="Status", value="Waiting for checkpoint...", interactive=False)
 
         def poll_checkpoint(pending):
             if pending is not None:
-                # Already holding a checkpoint — don't poll; let the user approve first
+                # Already holding a checkpoint — don't dequeue again
                 return gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
             cp = ui_handler.get_pending(timeout=0.1)
             if cp is None:
-                return pending, gr.update(visible=False), "", None, "Waiting for checkpoint..."
+                return pending, "Waiting for pipeline checkpoint...", gr.update(visible=False), "", None
             return (
                 cp,
+                "Review the data below and approve to continue.",
                 gr.update(visible=True),
                 f"## Stage {cp['stage']}: {cp['stage_name'].upper()}",
                 cp["data"],
-                "Review the data below and approve to continue.",
             )
 
         def approve(pending, data):
@@ -177,7 +179,7 @@ def build_app_with_handler(ui_handler: UIHandler, run_id: str) -> gr.Blocks:
         gr.Timer(1).tick(
             poll_checkpoint,
             inputs=[pending_state],
-            outputs=[pending_state, checkpoint_area, stage_label, data_json, status_out],
+            outputs=[pending_state, status_out, checkpoint_area, stage_label, data_json],
         )
         approve_btn.click(
             approve,
