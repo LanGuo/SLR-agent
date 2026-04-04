@@ -8,7 +8,39 @@ Runs entirely locally on a Mac Mini using **Gemma 4 26B MoE via Ollama**. Orches
 
 ## Quick Start
 
-**Prerequisites:** Python 3.11+, [Ollama](https://ollama.com) with `gemma4:26b` pulled, Pandoc (for Word export).
+### 1. Install prerequisites
+
+**Python 3.11+**
+
+**Ollama** — download from [ollama.com](https://ollama.com) or on Mac:
+```bash
+brew install ollama
+```
+
+**Pull the model** — the pipeline uses `gemma3:12b` by default (~8GB); swap to `gemma4:27b` (~18GB) for higher quality:
+```bash
+ollama pull gemma3:12b   # default, fits in 8GB VRAM
+# or
+ollama pull gemma4:27b   # recommended for best results, needs ~18GB RAM
+```
+
+**Start the Ollama server** (must be running before `slr run`):
+```bash
+ollama serve             # runs in foreground; open a new terminal for slr commands
+# On Mac you can also start the Ollama desktop app instead
+```
+
+Verify it's up:
+```bash
+curl http://localhost:11434   # should return "Ollama is running"
+```
+
+**Pandoc** (optional, for Word .docx export):
+```bash
+brew install pandoc
+```
+
+### 2. Install and run
 
 ```bash
 # Install
