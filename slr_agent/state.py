@@ -46,3 +46,5 @@ class OrchestratorState(TypedDict):
     manuscript_path: str | None
     current_stage: str
     checkpoint_pending: bool
+    template: dict | None              # normalized template structure
+    manuscript_draft_version: int      # current revision number, starts at 1

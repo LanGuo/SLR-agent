@@ -37,3 +37,26 @@ def test_pico_result_keys():
         output_language="en",
     )
     assert len(pico["query_strings"]) == 1
+
+
+def test_run_config_new_fields():
+    from slr_agent.config import RunConfig
+    cfg: RunConfig = {
+        "checkpoint_stages": [1, 3],
+        "fetch_fulltext": False,
+        "output_format": "markdown",
+        "pubmed_api_key": None,
+        "max_results": 50,
+        "search_sources": ["pubmed"],
+        "template_path": "/tmp/template.json",
+        "hitl_mode": "cli",
+    }
+    assert cfg["hitl_mode"] == "cli"
+    assert cfg["template_path"] == "/tmp/template.json"
+
+
+def test_orchestrator_state_new_fields():
+    from slr_agent.state import OrchestratorState
+    keys = OrchestratorState.__annotations__.keys()
+    assert "template" in keys
+    assert "manuscript_draft_version" in keys
