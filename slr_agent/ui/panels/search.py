@@ -15,7 +15,8 @@ def build_search_panel(data: dict, ui_handler, pending) -> tuple:
                     f"Retrieved: **{data.get('n_retrieved', len(papers))}** papers "
                     f"(after removing **{data.get('n_duplicates_removed', 0)}** duplicates)")
 
-        gr.Markdown("Uncheck papers to exclude them before screening. Add missing papers below.")
+        cap_note = f" (showing first 200 of {len(papers)} — remaining papers will proceed to screening)" if len(papers) > 200 else ""
+        gr.Markdown(f"Uncheck papers to exclude them before screening. Add missing papers below.{cap_note}")
 
         # Paper checkboxes
         paper_checks = []

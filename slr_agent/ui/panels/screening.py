@@ -76,6 +76,8 @@ def build_screening_panel(data: dict, ui_handler) -> gr.Column:
             return "Approved. Pipeline continuing..."
 
         def on_add_pmid(pmid_val):
+            if not pmid_val.strip():
+                return "Enter a PMID first."
             return f"PMID {pmid_val.strip()} queued for manual include."
 
         add_btn.click(on_add_pmid, inputs=[pmid_input], outputs=[add_status])

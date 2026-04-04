@@ -63,13 +63,19 @@ def build_manuscript_panel(data: dict, ui_handler) -> gr.Column:
 
         status_out = gr.Textbox(label="Status", value="Review draft and rubric scores.", interactive=False)
 
+        _resumed = [False]  # guard against double-resume
+
         def on_approve(draft_text):
-            # Save final draft, then approve
-            ui_handler.resume({"action": "approve", "draft": draft_text})
+            if _resumed[0]:
+                return "Already submitted — waiting for pipeline."
+            _resumed[0] = True
+            ui_handler.resume({**data, "action": "approve", "draft": draft_text})
             return "Finalised. Generating Word export..."
 
         def on_revise(rubric_text, extra_text, draft_text):
-            # Build updated template with edited criteria
+            if _resumed[0]:
+                return "Already submitted — waiting for pipeline."
+            _resumed[0] = True
             criteria = [c.strip() for c in rubric_text.split("\n") if c.strip()]
             if extra_text.strip():
                 criteria += [c.strip() for c in extra_text.split("\n") if c.strip()]
@@ -78,6 +84,7 @@ def build_manuscript_panel(data: dict, ui_handler) -> gr.Column:
                 "sections": _redistribute_criteria(template.get("sections", []), criteria),
             }
             ui_handler.resume({
+                **data,
                 "action": "revise",
                 "template": updated_template,
                 "draft": draft_text,
