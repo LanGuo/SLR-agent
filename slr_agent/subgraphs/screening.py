@@ -50,16 +50,20 @@ def _screen_abstracts_node(state: dict, db: Database, llm) -> dict:
         }], schema=schema)
 
         paper_map = {p["pmid"]: p for p in batch}
+        seen_pmids: set[str] = set()
         for decision in result.get("decisions", []):
             pmid = decision["pmid"]
+            if pmid in seen_pmids:
+                continue
             paper = paper_map.get(pmid)
             if not paper:
                 continue
+            seen_pmids.add(pmid)
             dec = decision["decision"]
             reason = decision["reason"]
 
             # Ground the reason against the abstract
-            grounded, quarantined_fields = grounder.ground_extracted_data(
+            _, quarantined_fields = grounder.ground_extracted_data(
                 {"screening_reason": reason},
                 source_text=paper["abstract"],
                 pmid=pmid,
@@ -71,7 +75,7 @@ def _screen_abstracts_node(state: dict, db: Database, llm) -> dict:
 
             paper["screening_decision"] = dec
             paper["screening_reason"] = reason
-            paper["quarantined_fields"] = list(paper["quarantined_fields"]) + quarantined_fields
+            paper["quarantined_fields"] = quarantined_fields
             db.upsert_paper(paper)
 
             if dec == "include":
