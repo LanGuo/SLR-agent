@@ -38,7 +38,7 @@ def _draft_manuscript_node(state: dict, db: Database, llm, output_dir: str) -> d
         response = llm.chat([{
             "role": "user",
             "content": (
-                f"write the {name} section of a systematic review manuscript. "
+                f"write the {name.lower()} section of a systematic review manuscript. "
                 f"Instructions: {instructions} "
                 f"Context: P={pico['population']}, I={pico['intervention']}, "
                 f"C={pico['comparator']}, O={pico['outcome']}. "

@@ -13,7 +13,7 @@ def _make_llm():
     # Section generation — one response matched per section name
     for section in DEFAULT_PRISMA_TEMPLATE["sections"]:
         name = section["name"]
-        llm.register(f"write the {name} section", {"text": f"Content of {name}."})
+        llm.register(f"write the {name.lower()} section", {"text": f"Content of {name}."})
     # Rubric scoring
     llm.register("score the following systematic review draft", {
         "scores": [{"criterion": "Names all databases", "score": "met", "explanation": "PubMed named."}]
@@ -66,8 +66,8 @@ def test_manuscript_uses_custom_template(db, tmp_path):
     }
 
     llm = MockLLM()
-    llm.register("write the Background section", {"text": "Background content."})
-    llm.register("write the Methods section", {"text": "Methods content."})
+    llm.register("write the background section", {"text": "Background content."})
+    llm.register("write the methods section", {"text": "Methods content."})
     llm.register("score the following systematic review draft", {"scores": []})
 
     with patch("slr_agent.subgraphs.manuscript.run_pandoc", return_value=None):
