@@ -27,7 +27,34 @@ def _draft_manuscript_node(state: dict, db: Database, llm, output_dir: str) -> d
 
     papers = db.get_papers_by_decision(run_id, "include")
     screening = state.get("screening_counts") or {}
+    search = state.get("search_counts") or {}
     lang_suffix = f" Write in {output_language}." if output_language != "en" else ""
+
+    # Build a factual search context block from actual run state so the LLM
+    # does not hallucinate databases, dates, or PRISMA counts.
+    sources = state.get("search_sources") or ["pubmed"]
+    source_labels = {"pubmed": "PubMed/MEDLINE", "biorxiv": "bioRxiv"}
+    sources_str = ", ".join(source_labels.get(s, s) for s in sources)
+    date_from = state.get("date_from") or "2000-01-01"
+    date_to = state.get("date_to") or "present"
+    query_strings = (pico.get("query_strings") or [])
+    queries_str = "\n".join(f"  - {q}" for q in query_strings)
+    screening_criteria = state.get("screening_criteria") or {}
+    inclusion_str = "; ".join(screening_criteria.get("inclusion_criteria") or [])
+    exclusion_str = "; ".join(screening_criteria.get("exclusion_criteria") or [])
+
+    search_context = (
+        f"ACTUAL SEARCH DETAILS (use these exact facts — do not invent other databases or dates):\n"
+        f"Databases searched: {sources_str}\n"
+        f"Date range: {date_from} to {date_to}\n"
+        f"Search queries used:\n{queries_str}\n"
+        f"Records retrieved: {search.get('n_retrieved', len(papers))}\n"
+        f"After screening: {len(papers)} studies included, "
+        f"{screening.get('n_excluded', '?')} excluded, "
+        f"{screening.get('n_uncertain', '?')} uncertain\n"
+        f"Inclusion criteria: {inclusion_str or 'see PICO'}\n"
+        f"Exclusion criteria: {exclusion_str or 'see PICO'}\n"
+    )
 
     # Draft each section from the template
     sections_md = []
@@ -39,12 +66,11 @@ def _draft_manuscript_node(state: dict, db: Database, llm, output_dir: str) -> d
             "role": "user",
             "content": (
                 f"write the {name.lower()} section of a systematic review manuscript. "
-                f"Instructions: {instructions} "
-                f"Context: P={pico['population']}, I={pico['intervention']}, "
-                f"C={pico['comparator']}, O={pico['outcome']}. "
-                f"{len(papers)} studies included. "
-                f"Synthesis:\n{synthesis_text[:2000]}\n"
-                f"Excluded: {screening.get('n_excluded', '?')}. "
+                f"Instructions: {instructions}\n\n"
+                f"PICO: P={pico['population']}, I={pico['intervention']}, "
+                f"C={pico['comparator']}, O={pico['outcome']}.\n\n"
+                f"{search_context}\n"
+                f"Synthesis:\n{synthesis_text[:2000]}\n\n"
                 f"Style: {style}{lang_suffix} "
                 "Return JSON with field 'text'."
             ),
