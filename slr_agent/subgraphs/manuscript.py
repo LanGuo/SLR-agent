@@ -5,6 +5,54 @@ from slr_agent.db import Database
 from slr_agent.export import run_pandoc
 from slr_agent.template import DEFAULT_PRISMA_TEMPLATE, score_rubric
 
+
+def _build_study_table(papers: list[dict]) -> str:
+    """Generate a markdown study characteristics table directly from extracted data."""
+    if not papers:
+        return "_No included studies._"
+    header = (
+        "| PMID | Title | Study Design | Population | Intervention | "
+        "Comparator | Primary Outcome | Sample Size | Follow-up |\n"
+        "|------|-------|--------------|------------|--------------|"
+        "------------|-----------------|-------------|----------|\n"
+    )
+    rows = []
+    for p in papers:
+        ed = p.get("extracted_data") or {}
+        title = (p.get("title") or "")[:60]
+        rows.append(
+            f"| {p['pmid']} | {title} | {ed.get('study_design', '?')} | "
+            f"{ed.get('population_details', '?')[:60]} | "
+            f"{ed.get('intervention', '?')[:60]} | "
+            f"{ed.get('comparator', '?')[:60]} | "
+            f"{ed.get('primary_outcome', '?')[:60]} | "
+            f"{ed.get('sample_size', '?')} | "
+            f"{ed.get('follow_up_duration', '?')} |"
+        )
+    return header + "\n".join(rows)
+
+
+def _build_grade_table(papers: list[dict]) -> str:
+    """Generate a markdown GRADE summary table directly from grade_score data."""
+    if not papers:
+        return "_No included studies._"
+    header = (
+        "| PMID | Title | Certainty | Risk of Bias | Inconsistency | "
+        "Indirectness | Imprecision |\n"
+        "|------|-------|-----------|--------------|---------------|"
+        "--------------|-------------|\n"
+    )
+    rows = []
+    for p in papers:
+        gs = p.get("grade_score") or {}
+        title = (p.get("title") or "")[:60]
+        rows.append(
+            f"| {p['pmid']} | {title} | {gs.get('certainty', '?')} | "
+            f"{gs.get('risk_of_bias', '?')} | {gs.get('inconsistency', '?')} | "
+            f"{gs.get('indirectness', '?')} | {gs.get('imprecision', '?')} |"
+        )
+    return header + "\n".join(rows)
+
 _TEXT_SCHEMA = {
     "type": "object",
     "properties": {"text": {"type": "string"}},
@@ -93,7 +141,17 @@ def _draft_manuscript_node(state: dict, db: Database, llm, output_dir: str) -> d
         f"- There were no named human reviewers, no third reviewer, no Cochrane "
         f"tools, no NOS scale, no Excel forms, and no reference management "
         f"software; do not invent these or leave bracketed placeholders\n"
+        f"- Do not reference supplementary tables, supplementary materials, "
+        f"or appendices — no such files exist\n"
     )
+
+    # Pre-generate tables directly from DB — no LLM, exact data
+    study_table = _build_study_table(papers)
+    grade_table = _build_grade_table(papers)
+
+    # Section names that should receive the pre-generated tables appended verbatim
+    _STUDY_TABLE_SECTIONS = {"study characteristics", "characteristics of included studies"}
+    _GRADE_TABLE_SECTIONS = {"risk of bias", "quality assessment", "grade assessment"}
 
     # Draft each section from the template
     sections_md = []
@@ -114,7 +172,16 @@ def _draft_manuscript_node(state: dict, db: Database, llm, output_dir: str) -> d
                 "Return JSON with field 'text'."
             ),
         }], schema=_TEXT_SCHEMA)
-        sections_md.append(f"## {name}\n\n{response['text']}")
+        section_md = f"## {name}\n\n{response['text']}"
+
+        # Append pre-generated tables to the relevant sections
+        name_lower = name.lower()
+        if any(k in name_lower for k in _STUDY_TABLE_SECTIONS):
+            section_md += f"\n\n**Table 1. Characteristics of Included Studies**\n\n{study_table}"
+        if any(k in name_lower for k in _GRADE_TABLE_SECTIONS):
+            section_md += f"\n\n**Table 2. GRADE Evidence Quality Assessment**\n\n{grade_table}"
+
+        sections_md.append(section_md)
 
     draft = (
         f"# Systematic Review: {pico['intervention']} in {pico['population']}\n\n"
