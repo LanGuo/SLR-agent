@@ -66,8 +66,18 @@ def _draft_manuscript_node(state: dict, db: Database, llm, output_dir: str) -> d
         f"(full text where available); each extracted field verified against "
         f"source text via fuzzy string matching (rapidfuzz); unverifiable fields "
         f"quarantined and flagged for human review\n"
-        f"- There were no named human reviewers; this is an AI-assisted review "
-        f"with human-in-the-loop oversight at each stage\n"
+        f"- Risk of bias: assessed using GRADE (Grading of Recommendations "
+        f"Assessment, Development and Evaluation), not Cochrane RoB 2.0 or NOS; "
+        f"five GRADE domains assessed per study: risk of bias, inconsistency, "
+        f"indirectness, imprecision, and overall certainty "
+        f"(high/moderate/low/very low); assessed by the LLM from extracted data\n"
+        f"- Synthesis: narrative synthesis only — no meta-analysis, no forest "
+        f"plots, no statistical pooling; each synthesised claim was verified "
+        f"against the source paper extractions (LLM grounding); claims without "
+        f"supporting evidence were quarantined\n"
+        f"- There were no named human reviewers, no third reviewer, no Cochrane "
+        f"tools, no NOS scale, no Excel forms, and no reference management "
+        f"software; do not invent these or leave bracketed placeholders\n"
     )
 
     # Draft each section from the template
