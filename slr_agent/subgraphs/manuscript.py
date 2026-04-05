@@ -28,6 +28,8 @@ def _draft_manuscript_node(state: dict, db: Database, llm, output_dir: str) -> d
     papers = db.get_papers_by_decision(run_id, "include")
     screening = state.get("screening_counts") or {}
     search = state.get("search_counts") or {}
+    fulltext = state.get("fulltext_counts") or {}
+    extraction = state.get("extraction_counts") or {}
     lang_suffix = f" Write in {output_language}." if output_language != "en" else ""
 
     # Build a factual search context block from actual run state so the LLM
@@ -56,6 +58,19 @@ def _draft_manuscript_node(state: dict, db: Database, llm, output_dir: str) -> d
         f"{screening.get('n_uncertain', '?')} uncertain\n"
         f"Inclusion criteria: {inclusion_str or 'see PICO'}\n"
         f"Exclusion criteria: {exclusion_str or 'see PICO'}\n\n"
+        f"EXACT PRISMA FLOW COUNTS (use only these numbers — do not invent any):\n"
+        f"- Records identified via database search: {search.get('n_retrieved', len(papers))}\n"
+        f"- Duplicates removed: {search.get('n_duplicates_removed', 0)}\n"
+        f"- Records screened (titles/abstracts): {search.get('n_retrieved', len(papers)) - search.get('n_duplicates_removed', 0)}\n"
+        f"- Records excluded after screening: {screening.get('n_excluded', '?')}\n"
+        f"- Records uncertain / not assessed: {screening.get('n_uncertain', '?')}\n"
+        f"- Full-text articles assessed: {fulltext.get('n_fetched', 'not fetched — abstracts only')}\n"
+        f"- Full-text excluded: {fulltext.get('n_excluded', 'N/A')}\n"
+        f"- Studies included in review: {len(papers)}\n"
+        f"- Studies with quarantined extraction fields: {extraction.get('n_quarantined_fields', '?')}\n"
+        f"- PRISMA flow diagram: generated as a separate file ({run_id}_prisma.md) — "
+        f"do not write '[Figure would be included here]'; instead refer to it as "
+        f"'the accompanying PRISMA flow diagram'\n\n"
         f"HOW THIS REVIEW WAS CONDUCTED (AI-assisted pipeline — describe accurately):\n"
         f"- Search: automated via PubMed Entrez API and bioRxiv REST API; "
         f"deduplication by PMID (programmatic, no reference manager used)\n"
