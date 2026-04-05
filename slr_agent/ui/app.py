@@ -141,35 +141,91 @@ def build_app() -> gr.Blocks:
     return app
 
 
+def _papers_to_df_data(papers: list[dict]) -> list[list]:
+    """Convert papers list to rows for the extraction dataframe."""
+    rows = []
+    for p in papers:
+        grade = (p.get("grade_score") or {}).get("certainty", "")
+        n_quarantined = len(p.get("quarantined_fields") or [])
+        rows.append([
+            p.get("pmid", ""),
+            (p.get("title") or "")[:80],
+            grade,
+            n_quarantined,
+            False,   # exclude
+            False,   # re_extract
+        ])
+    return rows
+
+
 def build_app_with_handler(ui_handler: UIHandler, run_id: str) -> gr.Blocks:
     """Minimal app used by CLI --hitl ui: polls UIHandler and shows checkpoint panels."""
     with gr.Blocks(title=f"SLR Agent — Run {run_id}") as app:
         gr.Markdown(f"# SLR Agent Checkpoint Review\nRun: `{run_id}`")
 
         pending_state = gr.State(None)
-        # Status shown at all times (outside the hidden panel)
         status_out = gr.Textbox(label="Status", value="Waiting for pipeline checkpoint...", interactive=False)
 
-        # gr.Group supports visibility toggling reliably in Gradio 6
+        # Generic panel — used for all stages except 5
         with gr.Group(visible=False) as checkpoint_area:
             stage_label = gr.Markdown("## Checkpoint")
             data_code = gr.Code(label="Stage Data (editable JSON)", language="json", interactive=True)
             approve_btn = gr.Button("Approve & Continue", variant="primary")
 
+        # Stage 5 extraction panel — checkboxes for exclude / re-extract per paper
+        with gr.Group(visible=False) as extraction_panel:
+            gr.Markdown("## Stage 5: Extraction Review")
+            gr.Markdown(
+                "Check **Exclude** to remove a paper from synthesis. "
+                "Check **Re-extract** to rerun LLM extraction for that paper."
+            )
+            papers_df = gr.Dataframe(
+                headers=["PMID", "Title", "GRADE", "Quarantined fields", "Exclude", "Re-extract"],
+                datatype=["str", "str", "str", "number", "bool", "bool"],
+                col_count=(6, "fixed"),
+                interactive=True,
+                wrap=True,
+            )
+            approve_btn_extract = gr.Button("Approve & Continue", variant="primary")
+
+        # ── poll ────────────────────────────────────────────────────────────────
+
         def poll_checkpoint(pending):
             if pending is not None:
-                # Already holding a checkpoint — don't dequeue again
-                return gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+                return (gr.update(),) * 8
             cp = ui_handler.get_pending(timeout=0.1)
             if cp is None:
-                return pending, "Waiting for pipeline checkpoint...", gr.update(visible=False), "", ""
+                return (
+                    pending, "Waiting for pipeline checkpoint...",
+                    gr.update(visible=False), "", "",
+                    gr.update(visible=False), gr.update(),
+                    gr.update(),
+                )
+            is_extraction = cp["stage"] == 5
+            papers = cp["data"].get("papers", []) if is_extraction else []
             return (
                 cp,
-                "Review and edit the data below, then click Approve.",
-                gr.update(visible=True),
+                "Review below, then click Approve.",
+                gr.update(visible=not is_extraction),
                 f"## Stage {cp['stage']}: {cp['stage_name'].upper()}",
-                json.dumps(cp["data"], indent=2),
+                json.dumps(cp["data"], indent=2) if not is_extraction else "",
+                gr.update(visible=is_extraction),
+                gr.update(value=_papers_to_df_data(papers)),
+                gr.update(),
             )
+
+        gr.Timer(1).tick(
+            poll_checkpoint,
+            inputs=[pending_state],
+            outputs=[
+                pending_state, status_out,
+                checkpoint_area, stage_label, data_code,
+                extraction_panel, papers_df,
+                approve_btn_extract,
+            ],
+        )
+
+        # ── generic approve ──────────────────────────────────────────────────────
 
         def approve(pending, data_str):
             if pending is None:
@@ -181,15 +237,36 @@ def build_app_with_handler(ui_handler: UIHandler, run_id: str) -> gr.Blocks:
             ui_handler.resume({**edited, "action": "approve"})
             return None, "Approved. Waiting for next checkpoint...", gr.update(visible=False)
 
-        gr.Timer(1).tick(
-            poll_checkpoint,
-            inputs=[pending_state],
-            outputs=[pending_state, status_out, checkpoint_area, stage_label, data_code],
-        )
         approve_btn.click(
             approve,
             inputs=[pending_state, data_code],
             outputs=[pending_state, status_out, checkpoint_area],
+        )
+
+        # ── extraction approve ───────────────────────────────────────────────────
+
+        def approve_extraction(pending, df_value):
+            if pending is None:
+                return None, "No pending checkpoint.", gr.update(visible=False)
+            # df_value is a dict {"headers": [...], "data": [[...]]} in Gradio 6
+            rows = df_value.get("data", []) if isinstance(df_value, dict) else []
+            papers_orig = pending["data"].get("papers", [])
+            papers_out = []
+            for i, row in enumerate(rows):
+                pmid = row[0] if len(row) > 0 else (papers_orig[i]["pmid"] if i < len(papers_orig) else "")
+                exclude = bool(row[4]) if len(row) > 4 else False
+                re_extract = bool(row[5]) if len(row) > 5 else False
+                entry = {"pmid": pmid, "exclude": exclude, "re_extract": re_extract}
+                if i < len(papers_orig):
+                    entry["extracted_data"] = papers_orig[i].get("extracted_data", {})
+                papers_out.append(entry)
+            ui_handler.resume({"papers": papers_out, "action": "approve"})
+            return None, "Approved. Waiting for next checkpoint...", gr.update(visible=False)
+
+        approve_btn_extract.click(
+            approve_extraction,
+            inputs=[pending_state, papers_df],
+            outputs=[pending_state, status_out, extraction_panel],
         )
 
     return app

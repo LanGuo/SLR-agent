@@ -248,12 +248,24 @@ def create_orchestrator(
         ]
         emit_data = {**dict(result.get("extraction_counts") or {}), "papers": paper_list}
         edited = _maybe_pause(5, "extraction", emit_data, run_id)
-        # Apply manual field edits
+        reextract_pmids: set[str] = set()
         for p in edited.get("papers", []):
-            record = db.get_paper(run_id, p["pmid"])
-            if record and p.get("extracted_data"):
+            pmid = p.get("pmid", "")
+            record = db.get_paper(run_id, pmid)
+            if not record:
+                continue
+            if p.get("exclude"):
+                record["screening_decision"] = "excluded_manual"
+                record["screening_reason"] = "Excluded by user at extraction gate"
+                db.upsert_paper(record)
+            elif p.get("re_extract"):
+                reextract_pmids.add(pmid)
+            elif p.get("extracted_data"):
                 record["extracted_data"] = p["extracted_data"]
                 db.upsert_paper(record)
+        if reextract_pmids:
+            _get_emitter(run_id).log(f"Re-extracting {len(reextract_pmids)} papers...")
+            extraction_sg.invoke({**state, "reextract_pmids": reextract_pmids})
         return {**state, **result, "current_stage": "extraction_done"}
 
     def synthesis_node(state: dict) -> dict:

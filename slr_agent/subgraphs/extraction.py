@@ -28,6 +28,10 @@ def _extract_node(state: dict, db: Database, llm) -> dict:
     run_id = state["run_id"]
     pico = state["pico"]
     included = db.get_papers_by_decision(run_id, "include")
+    # If reextract_pmids is set (post-gate re-extraction), only process those papers
+    reextract_pmids = state.get("reextract_pmids")
+    if reextract_pmids:
+        included = [p for p in included if p["pmid"] in reextract_pmids]
     grounder = ExtractionGrounder()
 
     counts = ExtractionCounts(
