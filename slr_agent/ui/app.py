@@ -205,30 +205,63 @@ def build_app_with_handler(ui_handler: UIHandler, run_id: str) -> gr.Blocks:
                     )
             approve_btn_extract = gr.Button("Approve & Continue", variant="primary")
 
+        # Stage 7 manuscript panel — draft viewer + rubric scores + approve/revise
+        with gr.Group(visible=False) as manuscript_panel:
+            gr.Markdown("## Stage 7: Manuscript Review")
+            gr.Markdown(
+                "Review the draft and rubric scores below. "
+                "Click **Approve** to finalise, or **Revise** to trigger another LLM revision pass."
+            )
+            with gr.Row():
+                draft_version_label = gr.Markdown("Draft v1")
+            draft_display = gr.Code(
+                label="Manuscript Draft (read-only preview)",
+                language="markdown",
+                interactive=False,
+                value="",
+            )
+            rubric_display = gr.Code(
+                label="Rubric Scores",
+                language="json",
+                interactive=False,
+                value="",
+            )
+            with gr.Row():
+                approve_btn_manuscript = gr.Button("Approve & Finalise", variant="primary")
+                revise_btn_manuscript = gr.Button("Revise (re-run LLM)", variant="secondary")
+
         # ── poll ────────────────────────────────────────────────────────────────
 
         def poll_checkpoint(pending):
             if pending is not None:
-                return (gr.update(),) * 9
+                return (gr.update(),) * 11
             cp = ui_handler.get_pending(timeout=0.1)
             if cp is None:
                 return (
                     pending, [], "Waiting for pipeline checkpoint...",
                     gr.update(visible=False), "", "",
                     gr.update(visible=False), gr.update(), gr.update(),
+                    gr.update(visible=False), gr.update(), gr.update(),
                 )
             is_extraction = cp["stage"] == 5
+            is_manuscript = cp["stage"] == 7
             papers = cp["data"].get("papers", []) if is_extraction else []
+            draft = cp["data"].get("draft", "") if is_manuscript else ""
+            rubric = cp["data"].get("rubric", {}) if is_manuscript else {}
+            version = cp["data"].get("draft_version", 1) if is_manuscript else 1
             return (
                 cp,
                 papers,
                 "Review below, then click Approve.",
-                gr.update(visible=not is_extraction),
+                gr.update(visible=not is_extraction and not is_manuscript),
                 f"## Stage {cp['stage']}: {cp['stage_name'].upper()}",
-                json.dumps(cp["data"], indent=2) if not is_extraction else "",
+                json.dumps(cp["data"], indent=2) if not is_extraction and not is_manuscript else "",
                 gr.update(visible=is_extraction),
                 gr.update(value=_papers_to_df_data(papers)),
                 gr.update(),
+                gr.update(visible=is_manuscript),
+                gr.update(value=draft, label=f"Manuscript Draft v{version} (read-only preview)"),
+                gr.update(value=json.dumps(rubric, indent=2)),
             )
 
         gr.Timer(1).tick(
@@ -237,8 +270,8 @@ def build_app_with_handler(ui_handler: UIHandler, run_id: str) -> gr.Blocks:
             outputs=[
                 pending_state, papers_state, status_out,
                 checkpoint_area, stage_label, data_code,
-                extraction_panel, papers_df,
-                approve_btn_extract,
+                extraction_panel, papers_df, approve_btn_extract,
+                manuscript_panel, draft_display, rubric_display,
             ],
         )
 
@@ -302,6 +335,31 @@ def build_app_with_handler(ui_handler: UIHandler, run_id: str) -> gr.Blocks:
             approve_extraction,
             inputs=[pending_state, papers_df],
             outputs=[pending_state, status_out, extraction_panel],
+        )
+
+        # ── manuscript approve / revise ──────────────────────────────────────────
+
+        def approve_manuscript(pending):
+            if pending is None:
+                return None, "No pending checkpoint.", gr.update(visible=False)
+            ui_handler.resume({"action": "approve"})
+            return None, "Approved. Manuscript finalised.", gr.update(visible=False)
+
+        def revise_manuscript(pending):
+            if pending is None:
+                return None, "No pending checkpoint.", gr.update(visible=False)
+            ui_handler.resume({"action": "revise"})
+            return None, "Revision requested. Waiting for new draft...", gr.update(visible=False)
+
+        approve_btn_manuscript.click(
+            approve_manuscript,
+            inputs=[pending_state],
+            outputs=[pending_state, status_out, manuscript_panel],
+        )
+        revise_btn_manuscript.click(
+            revise_manuscript,
+            inputs=[pending_state],
+            outputs=[pending_state, status_out, manuscript_panel],
         )
 
     return app

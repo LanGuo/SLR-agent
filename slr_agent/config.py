@@ -14,7 +14,7 @@ class RunConfig(TypedDict, total=False):
     date_to: str | None            # search date range end, e.g. "2026-12-31"
 
 DEFAULT_CONFIG: RunConfig = {
-    "checkpoint_stages": [1, 2, 3, 5],
+    "checkpoint_stages": [1, 2, 3, 5, 7],
     "fetch_fulltext": True,
     "output_format": "both",
     "pubmed_api_key": None,
