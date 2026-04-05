@@ -44,8 +44,10 @@ def _draft_manuscript_node(state: dict, db: Database, llm, output_dir: str) -> d
     exclusion_str = "; ".join(screening_criteria.get("exclusion_criteria") or [])
 
     search_context = (
-        f"ACTUAL SEARCH DETAILS (use these exact facts — do not invent other databases or dates):\n"
-        f"Databases searched: {sources_str}\n"
+        f"ACTUAL SEARCH AND PIPELINE DETAILS — use only these facts. "
+        f"Do not invent reviewer names, software names, reference managers, "
+        f"figure numbers, or placeholders in brackets.\n\n"
+        f"Databases searched: {sources_str} (no other databases were searched)\n"
         f"Date range: {date_from} to {date_to}\n"
         f"Search queries used:\n{queries_str}\n"
         f"Records retrieved: {search.get('n_retrieved', len(papers))}\n"
@@ -53,7 +55,19 @@ def _draft_manuscript_node(state: dict, db: Database, llm, output_dir: str) -> d
         f"{screening.get('n_excluded', '?')} excluded, "
         f"{screening.get('n_uncertain', '?')} uncertain\n"
         f"Inclusion criteria: {inclusion_str or 'see PICO'}\n"
-        f"Exclusion criteria: {exclusion_str or 'see PICO'}\n"
+        f"Exclusion criteria: {exclusion_str or 'see PICO'}\n\n"
+        f"HOW THIS REVIEW WAS CONDUCTED (AI-assisted pipeline — describe accurately):\n"
+        f"- Search: automated via PubMed Entrez API and bioRxiv REST API; "
+        f"deduplication by PMID (programmatic, no reference manager used)\n"
+        f"- Screening: performed by a large language model (Gemma) applying the "
+        f"inclusion/exclusion criteria above to titles and abstracts; "
+        f"results reviewed and overrideable by a human operator at a checkpoint\n"
+        f"- Data extraction: performed by the same LLM from abstracts "
+        f"(full text where available); each extracted field verified against "
+        f"source text via fuzzy string matching (rapidfuzz); unverifiable fields "
+        f"quarantined and flagged for human review\n"
+        f"- There were no named human reviewers; this is an AI-assisted review "
+        f"with human-in-the-loop oversight at each stage\n"
     )
 
     # Draft each section from the template
