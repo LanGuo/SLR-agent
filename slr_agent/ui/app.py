@@ -164,6 +164,7 @@ def build_app_with_handler(ui_handler: UIHandler, run_id: str) -> gr.Blocks:
         gr.Markdown(f"# SLR Agent Checkpoint Review\nRun: `{run_id}`")
 
         pending_state = gr.State(None)
+        papers_state = gr.State([])   # full paper dicts for the extraction detail view
         status_out = gr.Textbox(label="Status", value="Waiting for pipeline checkpoint...", interactive=False)
 
         # Generic panel — used for all stages except 5
@@ -176,6 +177,7 @@ def build_app_with_handler(ui_handler: UIHandler, run_id: str) -> gr.Blocks:
         with gr.Group(visible=False) as extraction_panel:
             gr.Markdown("## Stage 5: Extraction Review")
             gr.Markdown(
+                "Click any row to see its extracted and quarantined fields below. "
                 "Check **Exclude** to remove a paper from synthesis. "
                 "Check **Re-extract** to rerun LLM extraction for that paper."
             )
@@ -186,25 +188,40 @@ def build_app_with_handler(ui_handler: UIHandler, run_id: str) -> gr.Blocks:
                 interactive=True,
                 wrap=True,
             )
+            with gr.Row():
+                with gr.Column():
+                    extracted_detail = gr.Code(
+                        label="Extracted fields (selected paper)",
+                        language="json",
+                        interactive=False,
+                        value="",
+                    )
+                with gr.Column():
+                    quarantined_detail = gr.Code(
+                        label="Quarantined fields (selected paper)",
+                        language="json",
+                        interactive=False,
+                        value="",
+                    )
             approve_btn_extract = gr.Button("Approve & Continue", variant="primary")
 
         # ── poll ────────────────────────────────────────────────────────────────
 
         def poll_checkpoint(pending):
             if pending is not None:
-                return (gr.update(),) * 8
+                return (gr.update(),) * 9
             cp = ui_handler.get_pending(timeout=0.1)
             if cp is None:
                 return (
-                    pending, "Waiting for pipeline checkpoint...",
+                    pending, [], "Waiting for pipeline checkpoint...",
                     gr.update(visible=False), "", "",
-                    gr.update(visible=False), gr.update(),
-                    gr.update(),
+                    gr.update(visible=False), gr.update(), gr.update(),
                 )
             is_extraction = cp["stage"] == 5
             papers = cp["data"].get("papers", []) if is_extraction else []
             return (
                 cp,
+                papers,
                 "Review below, then click Approve.",
                 gr.update(visible=not is_extraction),
                 f"## Stage {cp['stage']}: {cp['stage_name'].upper()}",
@@ -218,11 +235,29 @@ def build_app_with_handler(ui_handler: UIHandler, run_id: str) -> gr.Blocks:
             poll_checkpoint,
             inputs=[pending_state],
             outputs=[
-                pending_state, status_out,
+                pending_state, papers_state, status_out,
                 checkpoint_area, stage_label, data_code,
                 extraction_panel, papers_df,
                 approve_btn_extract,
             ],
+        )
+
+        # ── row select → detail panel ────────────────────────────────────────────
+
+        def show_paper_detail(papers, evt: gr.SelectData):
+            idx = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+            if not papers or idx >= len(papers):
+                return "", ""
+            p = papers[idx]
+            return (
+                json.dumps(p.get("extracted_data") or {}, indent=2),
+                json.dumps(p.get("quarantined_fields") or [], indent=2),
+            )
+
+        papers_df.select(
+            show_paper_detail,
+            inputs=[papers_state],
+            outputs=[extracted_detail, quarantined_detail],
         )
 
         # ── generic approve ──────────────────────────────────────────────────────
