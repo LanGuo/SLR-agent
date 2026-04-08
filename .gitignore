@@ -8,3 +8,6 @@ dist/
 *.egg-info/
 outputs/
 .venv/
+
+.DS_Store
+uv.lock
