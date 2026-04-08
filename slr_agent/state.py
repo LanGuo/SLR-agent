@@ -15,6 +15,8 @@ class PICOResult(TypedDict):
 class SearchCounts(TypedDict):
     n_retrieved: int
     n_duplicates_removed: int
+    n_pubmed: int          # papers actually stored from PubMed efetch
+    n_biorxiv: int         # papers stored from bioRxiv
 
 class ScreeningCounts(TypedDict):
     n_included: int

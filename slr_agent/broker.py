@@ -1,20 +1,32 @@
 import json
 import queue
 import threading
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import click
+
+if TYPE_CHECKING:
+    from slr_agent.trace import TraceWriter
 
 
 class CheckpointBroker:
     """Pauses the pipeline at a stage and delegates to a handler for human input."""
 
-    def __init__(self, handler: Any):
+    def __init__(self, handler: Any, trace_writer: "TraceWriter | None" = None):
         self._handler = handler
+        self._trace = trace_writer
 
     def pause(self, stage: int, stage_name: str, data: dict) -> dict:
         """Block until human approves. Returns edited data with 'action' key."""
-        return self._handler.handle(stage, stage_name, data)
+        result = self._handler.handle(stage, stage_name, data)
+        if self._trace is not None:
+            self._trace.write_hitl(
+                stage=stage,
+                stage_name=stage_name,
+                before=data,
+                after=result,
+            )
+        return result
 
 
 class NoOpHandler:
