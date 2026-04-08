@@ -21,6 +21,7 @@ def test_upsert_and_get_paper(db):
         title="Test paper",
         abstract="This is an abstract.",
         fulltext=None,
+        page_image_paths=[],
         source="abstract",
         screening_decision="include",
         screening_reason="Matches PICO criteria",

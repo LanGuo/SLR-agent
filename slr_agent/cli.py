@@ -11,6 +11,7 @@ from slr_agent.db import Database
 from slr_agent.emitter import ProgressEmitter
 from slr_agent.llm import LLMClient
 from slr_agent.orchestrator import create_orchestrator
+from slr_agent.trace import TraceWriter
 
 _DB_PATH = "slr_runs.db"
 _OUTPUT_DIR = "outputs"
@@ -18,7 +19,12 @@ _OUTPUT_DIR = "outputs"
 
 def _build_orchestrator(config: RunConfig, broker: CheckpointBroker, emitter: ProgressEmitter):
     db = Database(_DB_PATH)
-    llm = LLMClient()
+    trace_writer = TraceWriter(emitter.run_dir)
+    llm = LLMClient(
+        model=config.get("model", DEFAULT_CONFIG["model"]),
+        trace_writer=trace_writer,
+    )
+    broker._trace = trace_writer
     orchestrator = create_orchestrator(
         db=db, llm=llm, output_dir=_OUTPUT_DIR, config=config,
         db_path=_DB_PATH, broker=broker, emitter=emitter,
@@ -50,7 +56,19 @@ def cli():
     type=click.Path(exists=True),
     help="Manuscript template: JSON schema or PDF reference paper",
 )
-def run(question, no_fulltext, no_checkpoints, hitl, max_results, api_key, template_path):
+@click.option(
+    "--model",
+    default=DEFAULT_CONFIG["model"],
+    show_default=True,
+    help="Ollama model tag (e.g. gemma4:e4b, gemma4:26b, gemma4:31b)",
+)
+@click.option(
+    "--screening-batch-size",
+    default=DEFAULT_CONFIG["screening_batch_size"],
+    show_default=True,
+    help="Abstracts per LLM call during screening (smaller = more reliable JSON)",
+)
+def run(question, no_fulltext, no_checkpoints, hitl, max_results, api_key, template_path, model, screening_batch_size):
     """Start a new SLR run."""
     run_id = str(uuid.uuid4())[:8]
     checkpoint_stages = [] if no_checkpoints else DEFAULT_CONFIG["checkpoint_stages"]
@@ -63,6 +81,8 @@ def run(question, no_fulltext, no_checkpoints, hitl, max_results, api_key, templ
         search_sources=DEFAULT_CONFIG["search_sources"],
         template_path=template_path,
         hitl_mode="none" if no_checkpoints else hitl,
+        model=model,
+        screening_batch_size=screening_batch_size,
     )
 
     emitter = ProgressEmitter(

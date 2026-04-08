@@ -43,7 +43,7 @@ def create_orchestrator(
     pico_sg = create_pico_subgraph(llm=llm)
     search_sg = create_search_subgraph(db=db)
     screening_sg = create_screening_subgraph(db=db, llm=llm)
-    fulltext_sg = create_fulltext_subgraph(db=db, llm=llm)
+    fulltext_sg = create_fulltext_subgraph(db=db, llm=llm, output_dir=output_dir)
     extraction_sg = create_extraction_subgraph(db=db, llm=llm)
     synthesis_sg = create_synthesis_subgraph(db=db, llm=llm, output_dir=output_dir)
     manuscript_sg = create_manuscript_subgraph(db=db, llm=llm, output_dir=output_dir)
@@ -102,14 +102,26 @@ def create_orchestrator(
         }
         edited = _maybe_pause(1, "pico", gate_data, run_id)
         merged_pico = {**pico_fields, **{k: v for k, v in edited.items() if k not in _SEARCH_KEYS}}
+        final_search_sources = edited.get("search_sources", base["search_sources"])
+        final_max_results = int(edited.get("max_results", base["max_results"]))
+        final_date_from = edited.get("date_from", base["date_from"])
+        final_date_to = edited.get("date_to", base["date_to"])
+        # Overwrite the stage_1_pico.json with user-edited values so the file matches what runs
+        _get_emitter(run_id).emit(1, {
+            **merged_pico,
+            "search_sources": final_search_sources,
+            "max_results": final_max_results,
+            "date_from": final_date_from,
+            "date_to": final_date_to,
+        })
         return {
             **base,
             **sub_result,
             "pico": merged_pico,
-            "search_sources": edited.get("search_sources", base["search_sources"]),
-            "max_results": int(edited.get("max_results", base["max_results"])),
-            "date_from": edited.get("date_from", base["date_from"]),
-            "date_to": edited.get("date_to", base["date_to"]),
+            "search_sources": final_search_sources,
+            "max_results": final_max_results,
+            "date_from": final_date_from,
+            "date_to": final_date_to,
             "current_stage": "pico_done",
         }
 
@@ -210,9 +222,10 @@ def create_orchestrator(
         uncertain = db.get_papers_by_decision(run_id, "uncertain")
         paper_list = [
             {"pmid": p["pmid"], "title": p["title"],
-             "abstract": (p["abstract"] or "")[:300],
+             "abstract": (p["abstract"] or "")[:2000],
              "decision": p["screening_decision"],
-             "reason": p["screening_reason"]}
+             "reason": p["screening_reason"],
+             "criterion_scores": p.get("criterion_scores") or []}
             for p in papers + excluded + uncertain
         ]
         emit_data = {**dict(result.get("screening_counts") or {}), "papers": paper_list}
@@ -223,7 +236,7 @@ def create_orchestrator(
                 record = db.get_paper(run_id, p["pmid"])
                 if record and record["screening_decision"] != p["decision"]:
                     record["screening_decision"] = p["decision"]
-                    record["screening_reason"] = p.get("reason", "User override")
+                    record["screening_reason"] = p.get("reason") or "User override at HITL gate"
                     db.upsert_paper(record)
         return {**state, **result, "screening_criteria": screening_criteria, "current_stage": "screening_done"}
 
@@ -248,7 +261,7 @@ def create_orchestrator(
         ]
         emit_data = {**dict(result.get("extraction_counts") or {}), "papers": paper_list}
         edited = _maybe_pause(5, "extraction", emit_data, run_id)
-        reextract_pmids: set[str] = set()
+        llm_ground_pmids: set[str] = set()
         for p in edited.get("papers", []):
             pmid = p.get("pmid", "")
             record = db.get_paper(run_id, pmid)
@@ -258,15 +271,67 @@ def create_orchestrator(
                 record["screening_decision"] = "excluded_manual"
                 record["screening_reason"] = "Excluded by user at extraction gate"
                 db.upsert_paper(record)
-            elif p.get("re_extract"):
-                reextract_pmids.add(pmid)
+            elif p.get("llm_ground"):
+                llm_ground_pmids.add(pmid)
             elif p.get("extracted_data"):
                 record["extracted_data"] = p["extracted_data"]
                 db.upsert_paper(record)
-        if reextract_pmids:
-            _get_emitter(run_id).log(f"Re-extracting {len(reextract_pmids)} papers...")
-            extraction_sg.invoke({**state, "reextract_pmids": reextract_pmids})
+        if llm_ground_pmids:
+            _get_emitter(run_id).log(
+                f"LLM grounding quarantined fields for {len(llm_ground_pmids)} papers..."
+            )
+            _llm_ground_quarantined(run_id, llm_ground_pmids)
         return {**state, **result, "current_stage": "extraction_done"}
+
+    _LLM_GROUND_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "supported": {"type": "boolean"},
+            "span": {"type": "string"},
+        },
+        "required": ["supported", "span"],
+    }
+
+    def _llm_ground_quarantined(run_id: str, pmids: set[str]) -> None:
+        """Re-verify quarantined fields using the LLM instead of fuzzy matching.
+
+        For each quarantined field the LLM is asked whether the source text supports
+        the extracted value (even if phrased differently). Confirmed fields are moved
+        into extracted_data; unconfirmed fields remain quarantined.
+        """
+        for pmid in pmids:
+            record = db.get_paper(run_id, pmid)
+            if not record:
+                continue
+            quarantined = list(record.get("quarantined_fields") or [])
+            if not quarantined:
+                continue
+            source_text = record.get("fulltext") or record.get("abstract", "")
+            extracted = dict(record.get("extracted_data") or {})
+            remaining = []
+            for qf in quarantined:
+                field = qf.get("field", "")
+                value = qf.get("value", "")
+                result = llm.chat([{
+                    "role": "user",
+                    "content": (
+                        f"You are verifying an extracted field for a systematic review.\n\n"
+                        f"Field: {field}\n"
+                        f"Extracted value: \"{value}\"\n\n"
+                        f"Source text:\n{source_text[:6000]}\n\n"
+                        "Does the source text support this value, even if phrased differently "
+                        "(e.g. paraphrased, abbreviated, or expressed as a number vs words)? "
+                        "Return JSON: {\"supported\": true or false, "
+                        "\"span\": \"the relevant quote from the source, or empty string\"}"
+                    ),
+                }], schema=_LLM_GROUND_SCHEMA)
+                if result.get("supported"):
+                    extracted[field] = value
+                else:
+                    remaining.append(qf)
+            record["extracted_data"] = extracted
+            record["quarantined_fields"] = remaining
+            db.upsert_paper(record)
 
     def synthesis_node(state: dict) -> dict:
         _get_emitter(state["run_id"]).log("Synthesising evidence...")
@@ -312,6 +377,17 @@ def create_orchestrator(
                 _get_emitter(run_id).emit(7, {"rubric": rubric, "draft_version": checkpoint_data["draft_version"]})
                 edited = _broker.pause(7, "manuscript", checkpoint_data)
                 if edited.get("action") != "revise":
+                    # Persist any direct edits or section rewrites the user made in the UI
+                    edited_draft = edited.get("edited_draft", "")
+                    if edited_draft and edited_draft != draft:
+                        with open(manuscript_path, "w") as fh:
+                            fh.write(edited_draft)
+                        from slr_agent.export import run_pandoc
+                        docx_path = manuscript_path.replace(".md", ".docx")
+                        try:
+                            run_pandoc(manuscript_path, docx_path)
+                        except RuntimeError:
+                            pass
                     break
                 revised_template = edited.get("template") or template
                 revised_result = manuscript_sg.invoke({

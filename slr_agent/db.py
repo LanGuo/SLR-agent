@@ -39,9 +39,11 @@ class PaperRecord(TypedDict):
     title: str
     abstract: str
     fulltext: str | None
+    page_image_paths: list[str]   # paths to PNG page renders for multimodal extraction
     source: Literal["abstract", "fulltext"]
     screening_decision: Literal["include", "exclude", "uncertain"]
     screening_reason: str
+    criterion_scores: list[dict]   # per-criterion scores from screening LLM
     extracted_data: dict
     grade_score: GRADEScore
     provenance: list[Span]
@@ -61,9 +63,11 @@ CREATE TABLE IF NOT EXISTS papers (
     title TEXT,
     abstract TEXT,
     fulltext TEXT,
+    page_image_paths TEXT DEFAULT '[]',
     source TEXT DEFAULT 'abstract',
     screening_decision TEXT DEFAULT 'uncertain',
     screening_reason TEXT DEFAULT '',
+    criterion_scores TEXT DEFAULT '[]',
     extracted_data TEXT DEFAULT '{}',
     grade_score TEXT DEFAULT '{}',
     provenance TEXT DEFAULT '[]',
@@ -89,6 +93,12 @@ class Database:
         self.path = path
         with self.connect() as conn:
             conn.executescript(_SCHEMA)
+            # Migrate existing databases: add page_image_paths if not present
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(papers)").fetchall()}
+            if "page_image_paths" not in cols:
+                conn.execute("ALTER TABLE papers ADD COLUMN page_image_paths TEXT DEFAULT '[]'")
+            if "criterion_scores" not in cols:
+                conn.execute("ALTER TABLE papers ADD COLUMN criterion_scores TEXT DEFAULT '[]'")
 
     @contextmanager
     def connect(self):
@@ -108,15 +118,18 @@ class Database:
         with self.connect() as conn:
             conn.execute(
                 """INSERT INTO papers
-                   (pmid, run_id, title, abstract, fulltext, source,
-                    screening_decision, screening_reason, extracted_data,
+                   (pmid, run_id, title, abstract, fulltext, page_image_paths, source,
+                    screening_decision, screening_reason, criterion_scores, extracted_data,
                     grade_score, provenance, quarantined_fields)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(pmid, run_id) DO UPDATE SET
                      title=excluded.title, abstract=excluded.abstract,
-                     fulltext=excluded.fulltext, source=excluded.source,
+                     fulltext=excluded.fulltext,
+                     page_image_paths=excluded.page_image_paths,
+                     source=excluded.source,
                      screening_decision=excluded.screening_decision,
                      screening_reason=excluded.screening_reason,
+                     criterion_scores=excluded.criterion_scores,
                      extracted_data=excluded.extracted_data,
                      grade_score=excluded.grade_score,
                      provenance=excluded.provenance,
@@ -124,8 +137,10 @@ class Database:
                 (
                     paper["pmid"], paper["run_id"], paper["title"],
                     paper["abstract"], paper.get("fulltext"),
+                    json.dumps(paper.get("page_image_paths") or []),
                     paper["source"], paper["screening_decision"],
                     paper["screening_reason"],
+                    json.dumps(paper.get("criterion_scores") or []),
                     json.dumps(paper["extracted_data"]),
                     json.dumps(paper["grade_score"]),
                     json.dumps(paper["provenance"]),
@@ -209,9 +224,11 @@ class Database:
             title=title,
             abstract=abstract,
             fulltext=None,
+            page_image_paths=[],
             source="manual",
             screening_decision="uncertain",
             screening_reason="Manually added by user",
+            criterion_scores=[],
             extracted_data={},
             grade_score=GRADEScore(
                 certainty="low", risk_of_bias="high",
@@ -237,9 +254,11 @@ class Database:
                 title=metadata.get("title", os.path.basename(pdf_path)),
                 abstract=metadata.get("abstract", fulltext[:500]),
                 fulltext=fulltext,
+                page_image_paths=[],
                 source="manual",
                 screening_decision="uncertain",
                 screening_reason="Manually uploaded PDF",
+                criterion_scores=[],
                 extracted_data={},
                 grade_score=GRADEScore(
                     certainty="low", risk_of_bias="high",
@@ -264,4 +283,6 @@ class Database:
         d["grade_score"] = json.loads(d["grade_score"])
         d["provenance"] = json.loads(d["provenance"])
         d["quarantined_fields"] = json.loads(d["quarantined_fields"])
+        d["page_image_paths"] = json.loads(d.get("page_image_paths") or "[]")
+        d["criterion_scores"] = json.loads(d.get("criterion_scores") or "[]")
         return d  # type: ignore[return-value]

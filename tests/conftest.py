@@ -25,9 +25,11 @@ def sample_paper() -> PaperRecord:
             "in placebo (p<0.001). Conclusion: Aspirin significantly reduces SBP."
         ),
         fulltext=None,
+        page_image_paths=[],
         source="abstract",
         screening_decision="include",
         screening_reason="Matches PICO: hypertension, aspirin, placebo, BP reduction",
+        criterion_scores=[],
         extracted_data={
             "sample_size": "500",
             "intervention": "aspirin 100mg daily",
