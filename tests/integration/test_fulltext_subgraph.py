@@ -8,8 +8,9 @@ from slr_agent.llm import MockLLM
 def test_fetch_pmc_fulltext_returns_none_when_unavailable():
     with patch("slr_agent.subgraphs.fulltext.Entrez") as mock_entrez:
         mock_entrez.elink.side_effect = Exception("Not in PMC")
-        result = fetch_pmc_fulltext("99999")
-    assert result is None
+        fulltext, pmc_id = fetch_pmc_fulltext("99999")
+    assert fulltext is None
+    assert pmc_id is None
 
 
 def test_fulltext_subgraph_falls_back_to_abstract(db, sample_paper, mock_llm):
@@ -29,7 +30,8 @@ def test_fulltext_subgraph_falls_back_to_abstract(db, sample_paper, mock_llm):
         search_language="en", output_language="en",
     )
 
-    with patch("slr_agent.subgraphs.fulltext.fetch_pmc_fulltext", return_value=None):
+    # fetch_pmc_fulltext now returns (fulltext, pmc_id) — mock returns (None, None)
+    with patch("slr_agent.subgraphs.fulltext.fetch_pmc_fulltext", return_value=(None, None)):
         graph = create_fulltext_subgraph(db=db, llm=mock_llm)
         result = graph.invoke({
             "run_id": "run-test",

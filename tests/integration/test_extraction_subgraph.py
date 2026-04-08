@@ -8,7 +8,7 @@ def test_extraction_grounds_fields(db, sample_paper, mock_llm):
     db.ensure_run("run-test")
     db.upsert_paper(sample_paper)
 
-    mock_llm.register("extract structured data", {
+    mock_llm.register("Extract structured data", {
         "sample_size": "500 adults",
         "intervention": "aspirin 100mg daily",
         "comparator": "placebo",
@@ -16,7 +16,7 @@ def test_extraction_grounds_fields(db, sample_paper, mock_llm):
         "result": "SBP reduction 8.2 mmHg vs 1.1 mmHg (p<0.001)",
         "study_design": "randomised controlled trial",
     })
-    mock_llm.register("assess the quality of evidence", {
+    mock_llm.register("Assess the quality of evidence", {
         "certainty": "moderate",
         "risk_of_bias": "low",
         "inconsistency": "no",
@@ -49,7 +49,7 @@ def test_extraction_quarantines_hallucinated_field(db, mock_llm):
     paper = PaperRecord(
         pmid="77777", run_id="run-test",
         title="Paper", abstract="10 patients were treated.",
-        fulltext=None, source="abstract",
+        fulltext=None, page_image_paths=[], source="abstract",
         screening_decision="include", screening_reason="ok",
         extracted_data={}, grade_score=GRADEScore(
             certainty="low", risk_of_bias="high", inconsistency="no",
@@ -60,11 +60,11 @@ def test_extraction_quarantines_hallucinated_field(db, mock_llm):
     db.ensure_run("run-test")
     db.upsert_paper(paper)
 
-    mock_llm.register("extract structured data", {
+    mock_llm.register("Extract structured data", {
         "sample_size": "10 patients",
         "hallucinated_field": "5000 participants from 12 countries with diabetes",
     })
-    mock_llm.register("assess the quality of evidence", {
+    mock_llm.register("Assess the quality of evidence", {
         "certainty": "very_low", "risk_of_bias": "high",
         "inconsistency": "no", "indirectness": "no", "imprecision": "serious",
         "rationale": "Very low certainty",
