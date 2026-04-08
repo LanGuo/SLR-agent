@@ -48,8 +48,9 @@ def test_search_pubmed_only(db, pico):
     with patch("slr_agent.subgraphs.search.Entrez") as mock_entrez:
         mock_entrez.esearch.return_value = MagicMock()
         mock_entrez.read.side_effect = [
-            {"IdList": MOCK_PMIDS},
-            MOCK_FETCH_RESULT,
+            {"IdList": MOCK_PMIDS},   # esearch: main query
+            {"IdList": []},           # esearch: fallback query (fires when results < threshold)
+            MOCK_FETCH_RESULT,        # efetch: batch abstract fetch
         ]
         mock_entrez.efetch.return_value = MagicMock()
         graph = create_search_subgraph(db=db)
@@ -71,7 +72,7 @@ def test_search_biorxiv_adds_preprints(db, pico):
     with patch("slr_agent.subgraphs.search.Entrez") as mock_entrez, \
          patch("slr_agent.subgraphs.search.httpx") as mock_httpx:
         mock_entrez.esearch.return_value = MagicMock()
-        mock_entrez.read.side_effect = [{"IdList": MOCK_PMIDS}, MOCK_FETCH_RESULT]
+        mock_entrez.read.side_effect = [{"IdList": MOCK_PMIDS}, {"IdList": []}, MOCK_FETCH_RESULT]
         mock_entrez.efetch.return_value = MagicMock()
         mock_resp = MagicMock()
         mock_resp.json.return_value = MOCK_BIORXIV_RESPONSE
@@ -97,14 +98,18 @@ def test_search_biorxiv_failure_does_not_crash(db, pico):
     with patch("slr_agent.subgraphs.search.Entrez") as mock_entrez, \
          patch("slr_agent.subgraphs.search.httpx") as mock_httpx:
         mock_entrez.esearch.return_value = MagicMock()
-        mock_entrez.read.side_effect = [{"IdList": ["99999"]}, {
-            "PubmedArticle": [{
-                "MedlineCitation": {
-                    "PMID": {"#text": "99999"},
-                    "Article": {"ArticleTitle": "PubMed paper", "Abstract": {"AbstractText": "abstract"}},
-                }
-            }]
-        }]
+        mock_entrez.read.side_effect = [
+            {"IdList": ["99999"]},   # esearch: main query
+            {"IdList": []},          # esearch: fallback query
+            {                        # efetch: batch abstract fetch
+                "PubmedArticle": [{
+                    "MedlineCitation": {
+                        "PMID": {"#text": "99999"},
+                        "Article": {"ArticleTitle": "PubMed paper", "Abstract": {"AbstractText": "abstract"}},
+                    }
+                }]
+            },
+        ]
         mock_entrez.efetch.return_value = MagicMock()
         mock_httpx.get.side_effect = Exception("Connection refused")
 

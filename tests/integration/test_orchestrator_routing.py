@@ -15,7 +15,7 @@ def make_llm():
         "population": "adults", "intervention": "aspirin",
         "comparator": "placebo", "outcome": "bp reduction",
     })
-    llm.register("generate PubMed search query strings", {"query_strings": ["aspirin[tiab]"]})
+    llm.register("Generate 3-4 PubMed search query strings", {"query_strings": ["aspirin AND blood pressure"]})
     llm.register("Generate explicit, specific inclusion and exclusion criteria", {
         "inclusion_criteria": ["RCTs and systematic reviews", "Adults ≥18"],
         "exclusion_criteria": ["Animal studies", "Non-English"],

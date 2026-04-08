@@ -28,15 +28,27 @@ _DEFAULT_GRADE = GRADEScore(
     rationale="Not yet assessed",
 )
 
+def _esearch(term: str, retmax: int, date_from: str | None, date_to: str | None) -> list[str]:
+    """Run a single PubMed esearch and return the PMID list."""
+    kwargs: dict = {"db": "pubmed", "term": term, "retmax": retmax}
+    if date_from and date_to:
+        kwargs["mindate"] = date_from.replace("-", "/")
+        kwargs["maxdate"] = date_to.replace("-", "/")
+        kwargs["datetype"] = "pdat"
+    handle = Entrez.esearch(**kwargs)
+    record = Entrez.read(handle)
+    handle.close()
+    return record.get("IdList", [])
+
+
 def _search_pubmed_node(state: dict, db: Database) -> dict:
     pico = state["pico"]
     api_key = state.get("pubmed_api_key")
     max_results = state.get("max_results", 500)
     run_id = state["run_id"]
-    date_from = state.get("date_from")  # e.g. "2000-01-01"
-    date_to = state.get("date_to")      # e.g. "2026-12-31"
+    date_from = state.get("date_from")
+    date_to = state.get("date_to")
 
-    # Ensure the run exists in the DB before inserting papers (FK constraint)
     db.ensure_run(run_id)
 
     if api_key:
@@ -44,25 +56,37 @@ def _search_pubmed_node(state: dict, db: Database) -> dict:
     Entrez.email = "slr-agent@local"
 
     # Collect PMIDs in relevance order per query (PubMed returns best matches first).
-    # Use an ordered structure so we can cap the total while preferring top results.
+    # per_query_cap uses 2× headroom to compensate for overlap between PICO queries.
     seen: dict[str, None] = {}  # ordered set via dict keys
-    per_query_cap = max(1, max_results // max(len(pico["query_strings"]), 1))
+    n_queries = max(len(pico["query_strings"]), 1)
+    per_query_cap = max(50, max_results // n_queries * 2)
+
     for query in pico["query_strings"]:
-        search_kwargs: dict = {"db": "pubmed", "term": query, "retmax": per_query_cap}
-        if date_from and date_to:
-            # PubMed expects YYYY/MM/DD format
-            search_kwargs["mindate"] = date_from.replace("-", "/")
-            search_kwargs["maxdate"] = date_to.replace("-", "/")
-            search_kwargs["datetype"] = "pdat"
-        handle = Entrez.esearch(**search_kwargs)
-        record = Entrez.read(handle)
-        handle.close()
-        for pmid in record.get("IdList", []):
+        for pmid in _esearch(query, per_query_cap, date_from, date_to):
             seen[pmid] = None
         if not api_key:
-            time.sleep(0.34)  # 3 req/s limit without API key
+            time.sleep(0.34)
 
-    # Final cap: keep at most max_results unique PMIDs across all queries
+    # Fallback: if the LLM-generated queries returned very few results, try a simple
+    # keyword-only query built directly from PICO terms. This guards against overly
+    # restrictive queries with broken MeSH syntax or excessive Boolean complexity.
+    fallback_threshold = max(10, max_results // 10)
+    if len(seen) < fallback_threshold:
+        import warnings
+        warnings.warn(
+            f"PICO queries returned only {len(seen)} PMIDs (threshold {fallback_threshold}). "
+            "Running broad fallback query.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        fallback = (
+            f"({pico['intervention']}) AND ({pico['outcome']}) AND ({pico['population']})"
+        )
+        for pmid in _esearch(fallback, max_results, date_from, date_to):
+            seen[pmid] = None
+        if not api_key:
+            time.sleep(0.34)
+
     return {"_pubmed_pmids": list(seen)[:max_results]}
 
 def _fetch_pubmed_abstracts_node(state: dict, db: Database) -> dict:
@@ -71,6 +95,7 @@ def _fetch_pubmed_abstracts_node(state: dict, db: Database) -> dict:
     if not pmids:
         return {"_pubmed_count": 0}
 
+    stored = 0
     batch_size = 200
     for i in range(0, len(pmids), batch_size):
         batch = pmids[i : i + batch_size]
@@ -97,15 +122,16 @@ def _fetch_pubmed_abstracts_node(state: dict, db: Database) -> dict:
 
             db.upsert_paper(PaperRecord(
                 pmid=pmid, run_id=run_id, title=title, abstract=abstract,
-                fulltext=None, source="abstract",
+                fulltext=None, page_image_paths=[], source="abstract",
                 screening_decision="uncertain", screening_reason="",
                 extracted_data={}, grade_score=_DEFAULT_GRADE,
                 provenance=[], quarantined_fields=[],
             ))
+            stored += 1
         if not state.get("pubmed_api_key"):
             time.sleep(0.34)
 
-    return {"_pubmed_count": len(pmids)}
+    return {"_pubmed_count": stored}
 
 def _search_biorxiv_node(state: dict, db: Database) -> dict:
     """Fetch recent bioRxiv preprints via their date-range API.
@@ -125,6 +151,7 @@ def _search_biorxiv_node(state: dict, db: Database) -> dict:
             f"https://api.biorxiv.org/details/biorxiv/{date_from}/{date_to}/0/json",
             timeout=30,
         )
+        resp.raise_for_status()
         data = resp.json()
         for item in data.get("collection", [])[:max_results]:
             doi = item.get("doi", "")
@@ -135,14 +162,15 @@ def _search_biorxiv_node(state: dict, db: Database) -> dict:
             pmid_proxy = f"biorxiv:{doi}"
             db.upsert_paper(PaperRecord(
                 pmid=pmid_proxy, run_id=run_id, title=title, abstract=abstract,
-                fulltext=None, source="abstract",
+                fulltext=None, page_image_paths=[], source="abstract",
                 screening_decision="uncertain", screening_reason="",
                 extracted_data={}, grade_score=_DEFAULT_GRADE,
                 provenance=[], quarantined_fields=[],
             ))
             biorxiv_count += 1
-    except Exception:
-        pass  # bioRxiv unavailable — continue with PubMed results only
+    except Exception as exc:
+        import warnings
+        warnings.warn(f"bioRxiv search failed: {exc}", RuntimeWarning, stacklevel=2)
 
     return {"_biorxiv_count": biorxiv_count}
 
@@ -155,6 +183,8 @@ def _merge_counts_node(state: dict) -> dict:
         "search_counts": SearchCounts(
             n_retrieved=total,
             n_duplicates_removed=0,
+            n_pubmed=pubmed_count,
+            n_biorxiv=biorxiv_count,
         )
     }
 

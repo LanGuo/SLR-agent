@@ -12,10 +12,10 @@ def mock_llm():
         "comparator": "placebo",
         "outcome": "blood pressure reduction",
     })
-    llm.register("generate PubMed search query strings", {
+    llm.register("Generate 3-4 PubMed search query strings", {
         "query_strings": [
-            "hypertension[MeSH] AND ACE inhibitors[tiab] AND blood pressure[tiab]",
-            "antihypertensive agents[MeSH] AND randomized controlled trial[pt]",
+            "(ACE inhibitors OR angiotensin converting enzyme inhibitors) AND (blood pressure OR hypertension)",
+            "(antihypertensive) AND (hypertension OR high blood pressure) AND (adults)",
         ]
     })
     return llm
@@ -46,8 +46,8 @@ def test_pico_subgraph_detects_non_english():
         "comparator": "placebo",
         "outcome": "blood pressure reduction",
     })
-    llm.register("generate PubMed search query strings", {
-        "query_strings": ["hypertension[MeSH] AND ACE inhibitors[tiab]"]
+    llm.register("Generate 3-4 PubMed search query strings", {
+        "query_strings": ["(ACE inhibitors) AND (hypertension OR blood pressure)"]
     })
     graph = create_pico_subgraph(llm=llm)
     initial = {

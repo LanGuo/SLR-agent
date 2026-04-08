@@ -70,11 +70,24 @@ def _generate_queries_node(state: dict, llm) -> dict:
     result = llm.chat([{
         "role": "user",
         "content": (
-            f"generate PubMed search query strings for this PICO:\n"
-            f"P: {pico['population']}\nI: {pico['intervention']}\n"
-            f"C: {pico['comparator']}\nO: {pico['outcome']}\n\n"
-            f"Return JSON with field 'query_strings' (list of 2-4 PubMed queries "
-            f"using MeSH terms and field tags like [MeSH], [tiab], [pt])."
+            f"Generate 3-4 PubMed search query strings for this PICO:\n"
+            f"P (population): {pico['population']}\n"
+            f"I (intervention): {pico['intervention']}\n"
+            f"C (comparator): {pico['comparator']}\n"
+            f"O (outcome): {pico['outcome']}\n\n"
+            f"Rules:\n"
+            f"- Use ONLY plain Boolean operators: AND, OR, NOT, and parentheses.\n"
+            f"- Do NOT use any field tags such as [MeSH], [tiab], [pt], [Title/Abstract], etc.\n"
+            f"- EVERY query string MUST contain terms from ALL FOUR PICO components "
+            f"(P AND I AND C AND O). Never omit a component.\n"
+            f"- Vary coverage by using different synonyms and phrasings across queries, "
+            f"not by dropping components.\n"
+            f"- Each query must be broad enough to retrieve hundreds of papers.\n"
+            f"- Include synonyms and related terms using OR within each component block.\n"
+            f"- Structure each query as: (P terms) AND (I terms) AND (C terms) AND (O terms)\n"
+            f"- Example: (adults OR patients) AND (aspirin OR acetylsalicylic acid) AND "
+            f"(placebo OR standard care) AND (myocardial infarction OR stroke OR death)\n\n"
+            f"Return JSON with field 'query_strings' (list of strings)."
         ),
     }], schema={
         "type": "object",
