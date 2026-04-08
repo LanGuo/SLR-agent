@@ -11,3 +11,4 @@ outputs/
 
 .DS_Store
 uv.lock
+docs/kaggle_writeup_draft.md
