@@ -157,16 +157,17 @@ class PICOResult(TypedDict):
 
 ```python
 class RunConfig(TypedDict, total=False):
-    checkpoint_stages: list[int]   # default [1, 2, 3, 5, 6, 7]
+    checkpoint_stages: list[int]   # default [1, 2, 3, 5, 7]
     fetch_fulltext: bool
     output_format: Literal["markdown", "word", "both"]
     pubmed_api_key: str | None
-    max_results: int               # per source, default 500
+    max_results: int               # total cap (PubMed: distributed across queries), default 500
     search_sources: list[str]      # ["pubmed"] | ["pubmed", "biorxiv"]
     date_from: str | None          # "YYYY-MM-DD", default "2000-01-01"
     date_to: str | None            # "YYYY-MM-DD", default today
     template_path: str | None      # JSON schema or PDF reference paper
     hitl_mode: str | None          # "cli" | "ui" | "none"
+    screening_batch_size: int      # abstracts per LLM call during screening, default 3
 ```
 
 ### PaperRecord (SQLite only)
@@ -181,6 +182,7 @@ class PaperRecord(TypedDict):
     source: Literal["abstract", "fulltext"]
     screening_decision: Literal["include", "exclude", "uncertain", "excluded_manual"]
     screening_reason: str
+    criterion_scores: list[dict]   # per-criterion scores; each: {criterion, type, met, note}
     extracted_data: dict
     grade_score: GRADEScore
     provenance: list[Span]
@@ -210,6 +212,13 @@ pipeline thread          broker                  human
      │                     │                       │
 ```
 
+### Stage 2 — Search gate
+
+After retrieval, all papers are surfaced at `broker.pause(2, "search", data)`:
+
+- Set `excluded=true` on any paper to remove it before LLM screening (`screening_decision` → `excluded_manual`)
+- Add a paper by PMID by including an entry with `manual_add=true` — the pipeline fetches its abstract from PubMed
+
 ### Stage 3 — Two-gate screening
 
 Stage 3 has two broker calls: one before screening (criteria review) and one after (per-paper decision review):
@@ -220,14 +229,38 @@ Stage 3 has two broker calls: one before screening (criteria review) and one aft
 4. Screening subgraph runs with user-edited criteria
 5. `broker.pause(3, "screening", decisions)` — user reviews per-paper decisions
 
+**Screening prompt — strict exclusion rules:**
+In addition to the user-edited criteria, every screening prompt enforces 5 strict rules:
+1. The intervention must be the PRIMARY focus — incidental mentions → EXCLUDE
+2. Outcomes must include observed endpoint data — surrogate-only studies → EXCLUDE
+3. Protocol/design papers with no reported results → EXCLUDE
+4. Narrative reviews and non-systematic guideline summaries → EXCLUDE
+5. "uncertain" only when the abstract genuinely lacks information; default to EXCLUDE
+
+**Batch size and retry:** Controlled by `RunConfig["screening_batch_size"]` (default 3). After each batch LLM call, any PMID that did not receive a decision is retried individually. This guarantees full coverage even when the LLM truncates its output.
+
+**Criterion scoring:** For each paper the LLM returns a `criterion_scores` list — one entry per criterion — with `met` (`yes`/`no`/`unclear`) and a `note` quoting the relevant abstract span. The overall `decision` is then **derived algorithmically** from the scores (not from the LLM's free-form verdict):
+- Any exclusion criterion `met=yes` → `exclude`
+- Any inclusion criterion `met=no` → `exclude`
+- Study designs specified and none matched → `exclude`
+- Any `unclear` score (when not already excluded) → `uncertain`
+- All criteria met → `include`
+
+The LLM's `decision` field is used only as a fallback when no criterion scores are returned.
+
+**Gate B — Screening HITL panel (UI mode):** Filter radio (All / Include / Uncertain / Exclude), non-interactive dataframe of decisions, expandable detail panel showing full title, abstract (up to 2,000 characters), AI reason, and criterion scorecard. The scorecard uses `[IN]`/`[EX]`/`[SD]` type labels and `✓`/`✗`/`?` met indicators with per-criterion notes. Per-paper ✓ Include / ? Uncertain / ✗ Exclude buttons override decisions before final approval.
+
 ### Stage 7 — Revision loop
 
 Stage 7 runs in a loop while the user keeps requesting revisions:
 
 1. Manuscript subgraph generates draft + rubric scores
 2. `broker.pause(7, "manuscript", {draft, rubric, draft_version})` — user reviews
-3. If `action == "revise"`: re-run manuscript subgraph → new versioned draft → loop
-4. If `action == "approve"`: exit loop, finalize
+3. User has three editing modes (all combinable before approving):
+   - **Direct edit** — the draft code block is fully editable; user changes markdown inline
+   - **Section rewrite** — user names a section (e.g. `Methods`) and types a freeform instruction; the LLM rewrites just that section body in-place (no broker round-trip, updates the draft display immediately)
+   - **Full revise** — `action == "revise"`: re-runs the manuscript subgraph → new versioned draft → loops back to step 2
+4. `action == "approve"`: exit loop. If the draft was directly edited or section-rewritten, the `edited_draft` is written to disk and re-exported to `.docx` before finalising.
 
 ---
 
@@ -276,9 +309,19 @@ When a value passes the threshold check, its location in the source text is reco
 
 - Quarantined fields are stored, not dropped — the paper is not discarded
 - `extracted_data` contains only grounded fields; quarantined fields are in `quarantined_fields`
-- They appear in HITL gates for manual resolution: accept / edit / discard
+- They appear at the Stage 5 HITL gate for manual resolution
 - PRISMA flow diagram includes quarantine counts as a data quality signal
 - Full quarantine table queryable via SQLite or `slr status <run_id>`
+
+### LLM-based grounding (Stage 5 gate)
+
+Fuzzy matching fails on valid extractions that are heavily paraphrased, abbreviated, or expressed differently (e.g. `"96"` vs `"ninety-six"`, `"MI"` vs `"myocardial infarction"`). At the Stage 5 gate the user can check **LLM ground** on any paper to trigger a second-pass LLM grounding run on that paper's quarantined fields:
+
+1. For each quarantined field, the LLM is asked: *"Does the source text support this value, even if phrased differently?"*
+2. Fields confirmed (`supported: true`) are moved into `extracted_data`
+3. Fields not confirmed remain quarantined
+
+This is intentionally separate from re-extraction — the extracted value itself is not changed, only its quarantine status.
 
 ### Synthesis grounding (Stage 6)
 
@@ -297,26 +340,28 @@ A separate LLM-based grounding step: Gemma is asked to cite the PMIDs that suppo
 
 #### Result cap and relevance ordering
 
-PubMed returns results in **relevance order** by default (best matches first within each query). The cap is distributed evenly across query strings to keep the total within `max_results`:
+PubMed returns results in **relevance order** by default (best matches first within each query). The per-query cap uses **2× headroom** to compensate for overlap between PICO-derived query strings (which frequently retrieve the same papers):
 
 ```
-per_query_cap = max_results // len(query_strings)
+per_query_cap = max_results // len(query_strings) * 2
 ```
 
-For example, `max_results=50` with 4 query strings → 12–13 results per query. After merging (deduplicating by PMID), a final slice enforces the hard cap:
+After merging (deduplicating by PMID), a final slice enforces the hard cap:
 
 ```
 all_pmids = list(ordered_union_of_all_queries)[:max_results]
 ```
 
-This means the cap is applied to the **total** retrieved, not per-query, and the most relevant papers from each query strand are preferred over less relevant ones. There is no cross-query re-ranking — papers are ordered by which query retrieved them first, then by PubMed relevance within that query.
+The cap is applied to the **total** retrieved, not per-query. Without the 2× factor, heavily overlapping queries (e.g. three variations of "aspirin cardiovascular") would yield far fewer unique PMIDs than `max_results` after deduplication.
+
+**`n_pubmed` vs `n_retrieved`:** `n_pubmed` in `SearchCounts` counts papers actually stored (from `efetch` `PubmedArticle` records). This is lower than the esearch PMID count because some PMIDs correspond to letters, errata, and editorial notes that have no `Abstract` element in the XML. `n_retrieved = n_pubmed + n_biorxiv`.
 
 ### bioRxiv
 
 - Date-range API: `https://api.biorxiv.org/details/biorxiv/{date_from}/{date_to}/0/json`
 - No keyword search API — fetches recent preprints by date range, capped at `max_results`
 - PICO relevance filtering happens in Stage 3 screening (LLM-based), not at retrieval time
-- Failures (network, timeout) are silently skipped; pipeline continues with PubMed results only
+- Failures (network, timeout, non-200 HTTP) emit a `RuntimeWarning` and the pipeline continues with PubMed results only
 
 #### Combined volume
 
@@ -352,10 +397,29 @@ Three template formats all normalize to the same internal representation:
 | None | Built-in PRISMA 2020 default (`DEFAULT_PRISMA_TEMPLATE`) |
 
 **Two-pass generation:**
-1. **Draft pass** — Gemma 4 writes each section guided by its `instructions`
-2. **Rubric pass** — Gemma 4 scores each criterion (`met` / `partial` / `not met` + explanation)
+1. **Draft pass** — the LLM writes each section guided by its `instructions`
+2. **Rubric pass** — the LLM scores each criterion (`met` / `partial` / `not met` + explanation)
 
 The Stage 7 HITL gate shows the scored rubric alongside the draft. Triggering a revision re-runs Pass 1 targeting only `partial` / `not met` sections.
+
+### Hallucination prevention
+
+Each section prompt includes a `search_context` block containing only factual pipeline data, with explicit instructions not to invent any details:
+
+- Exact databases searched, date range, and query strings (from run state)
+- Exact PRISMA flow counts (retrieved, screened, excluded, included)
+- Accurate pipeline description: AI-assisted, GRADE (not Cochrane RoB 2.0 or NOS), narrative synthesis (no meta-analysis, no forest plots), no named human reviewers, no reference management software, no supplementary tables
+
+This prevents the most common manuscript hallucinations: invented database names, fake reviewer names, wrong risk-of-bias tools, and bracketed placeholders like `[Table 1]`.
+
+### Pre-generated tables
+
+Study characteristics and GRADE evidence tables are generated directly from the SQLite paper records (no LLM), then appended verbatim to the matching manuscript sections:
+
+- `_build_study_table(papers)` → appended to any section whose name contains "study characteristics" or "characteristics of included studies"
+- `_build_grade_table(papers)` → appended to any section whose name contains "risk of bias", "quality assessment", or "grade assessment"
+
+This ensures tables contain exact extracted values rather than LLM paraphrases.
 
 ---
 
@@ -367,7 +431,7 @@ Each call fans out to:
 
 1. **Disk** — `outputs/<run_id>/stage_N_<name>.json` (always)
 2. **CLI** — `click.echo` (if `echo` provided)
-3. **Gradio** — put to `Queue` polled by `app.load(..., every=1)` (if Gradio is running)
+3. **Gradio** — put to `Queue` polled by `gr.Timer(N).tick()` (if Gradio is running; Gradio 6 removed `app.load(every=N)`)
 
 The `name` parameter overrides the default stage name for custom filenames (e.g., `stage_3_screening_criteria.json` vs `stage_3_screening.json`).
 
@@ -378,6 +442,118 @@ The `name` parameter overrides the default stage name for custom filenames (e.g.
 LangGraph's `SqliteSaver` is used as the graph checkpointer. After every node completion, full graph state is persisted to `slr_runs.db`. This enables `slr resume <run_id>` to re-enter at the exact node where the run paused or failed.
 
 **Important:** `SqliteSaver` must be constructed as `SqliteSaver(conn)` with an already-open `sqlite3.connect()` connection. `SqliteSaver.from_conn_string()` is a context manager (yields, doesn't return) and cannot be used directly outside a `with` block.
+
+---
+
+## Gradio UI Panel Design
+
+`build_app_with_handler(ui_handler, run_id, llm)` builds the HITL review UI. A single `gr.Timer(1).tick()` polls `UIHandler.get_pending()` and routes to one of four stage-specific panel groups based on `cp["stage"]`:
+
+| Stage(s) | Panel | Components |
+|---|---|---|
+| 1, 3, 6 | Generic | Editable `gr.Code(language="json")` block + Approve button |
+| 2 | Search | `gr.Dataframe` with Exclude bool column; PMID add textbox; Approve button |
+| 5 | Extraction | `gr.Dataframe` with Exclude/LLM ground bool columns; row-click shows extracted and quarantined fields in two `gr.Code` panels |
+| 7 | Manuscript | Editable draft (`gr.Code`, interactive); section-rewrite accordion (section name + instruction → LLM rewrites section in-place); rubric scores; Approve / Full Revise buttons |
+
+**Implementation notes:**
+- `gr.Group` is used for visibility toggling (not `gr.Column`) — Gradio 6 requires `gr.Group` for `visible` updates to propagate correctly; panels use `elem_classes="checkpoint-panel"` with CSS `height: auto` to prevent flex-stretch layout issues
+- `gr.Timer(N).tick()` replaces the removed `app.load(every=N)` from Gradio 5
+- `gr.Dataframe` uses `column_count=(N, "fixed")` (the `col_count` parameter was deprecated in Gradio 6); `max_height=250` keeps tables scrollable without pushing buttons off-screen
+- `poll_checkpoint` returns 15 values matching its `outputs=` list (3 added for the Stage 2 search panel)
+- `papers_state = gr.State([])` holds full paper dicts between the timer tick and the row-select handler, avoiding redundant DB reads
+- Section rewrite runs entirely inside the Gradio handler (calls `_llm.chat()` directly) — no broker round-trip required; the updated draft is passed back via `edited_draft` only on Approve
+
+---
+
+## Trajectory Logging (TraceWriter)
+
+Every run writes two append-only JSONL trace files alongside the stage output files:
+
+```
+outputs/<run_id>/
+  llm_trace.jsonl    — one entry per Ollama call
+  hitl_trace.jsonl   — one entry per HITL gate interaction
+```
+
+### `llm_trace.jsonl`
+
+Each line is a JSON object recording the full context of one `LLMClient.chat()` call:
+
+```json
+{
+  "ts": 1712345678.123,
+  "model": "gemma4:e4b",
+  "think": true,
+  "attempt": 1,
+  "n_messages": 1,
+  "messages": [{"role": "user", "content": "You are screening abstracts..."}],
+  "schema_keys": ["decision", "pmid", "reason"],
+  "thinking": "The abstract describes a randomised trial. The population...",
+  "response": "{\"decisions\": [...]}",
+  "latency_s": 4.217,
+  "prompt_tokens": 312,
+  "completion_tokens": 89,
+  "error": null
+}
+```
+
+Fields:
+- `messages` — the full prompt including PICO context and batch text
+- `thinking` — Gemma 4's reasoning chain (only present when `think=True`; `null` otherwise)
+- `schema_keys` — sorted list of required output fields (avoids duplicating the full schema in every entry)
+- `error` — non-null only on failed attempts (e.g. `"JSONDecodeError: ..."`); a successful retry after a failed attempt produces two entries for the same logical call
+- `prompt_tokens` / `completion_tokens` — from Ollama's `prompt_eval_count` / `eval_count` response fields; `null` if not reported
+
+### `hitl_trace.jsonl`
+
+Each line records one broker gate interaction (called even in `NoOpHandler` mode so automated runs are traceable):
+
+```json
+{
+  "ts": 1712345890.456,
+  "stage": 3,
+  "stage_name": "screening",
+  "action": "approve",
+  "n_changes": 2,
+  "diff": {
+    "papers": {
+      "before": [{"pmid": "99999", "decision": "uncertain", ...}],
+      "after":  [{"pmid": "99999", "decision": "include",   ...}]
+    }
+  },
+  "before": { ... },
+  "after":  { ... }
+}
+```
+
+Fields:
+- `diff` — only keys whose values changed between what the pipeline produced and what the user returned; the `action` key is excluded from the diff
+- `n_changes` — number of changed keys (0 = pure approve with no edits)
+- `before` / `after` — full snapshots for complete auditability
+
+### Wiring
+
+`TraceWriter` is instantiated once per run in `_build_orchestrator` (in `cli.py`) using `emitter.run_dir` as the target directory. The same instance is injected into both `LLMClient` and `CheckpointBroker`:
+
+```python
+trace_writer = TraceWriter(emitter.run_dir)
+llm = LLMClient(model=..., trace_writer=trace_writer)
+broker._trace = trace_writer
+```
+
+`TraceWriter` does not hold open file handles — each `write_*` call opens, appends one line, and closes. This is safe under the GIL for single-process runs.
+
+### Use cases
+
+| Task | Which file | How |
+|---|---|---|
+| Replay a screening decision | `llm_trace.jsonl` | Find entries where `schema_keys` contains `"decision"` |
+| Inspect Gemma 4 reasoning chain | `llm_trace.jsonl` | Filter `"think": true`, read `"thinking"` field |
+| See what a user changed at a gate | `hitl_trace.jsonl` | Filter by `"stage"`, read `"diff"` |
+| Measure LLM latency per stage | `llm_trace.jsonl` | Aggregate `"latency_s"` by prompt content |
+| Identify JSON retry failures | `llm_trace.jsonl` | Filter `"error": {"$ne": null}` |
+| Token usage per run | `llm_trace.jsonl` | Sum `"prompt_tokens"` + `"completion_tokens"` |
 
 ---
 

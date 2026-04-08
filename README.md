@@ -2,7 +2,7 @@
 
 A general-purpose Systematic Literature Review (SLR) agent that takes any research question as input, runs a PRISMA-compliant pipeline, and produces a structured manuscript.
 
-Runs entirely locally using **Gemma 3 12B via Ollama** (default, ~8GB RAM). Orchestrated with **LangGraph** hierarchical subgraphs for explicit state machine control, resumability, and full audit trails. Designed for Gemma 4 26B MoE (~18GB RAM) for best results.
+Runs entirely locally using **Gemma 4 E4B via Ollama** (default, 9.6 GB). Orchestrated with **LangGraph** hierarchical subgraphs for explicit state machine control, resumability, and full audit trails.
 
 ---
 
@@ -17,12 +17,20 @@ Runs entirely locally using **Gemma 3 12B via Ollama** (default, ~8GB RAM). Orch
 brew install ollama
 ```
 
-**Pull the model** — the pipeline uses `gemma3:12b` by default (~8GB); swap to `gemma4:27b` (~18GB) for higher quality:
+**Pull the model** — the pipeline uses `gemma4:e4b` by default (9.6 GB, fits in 16 GB unified memory):
 ```bash
-ollama pull gemma3:12b   # default, fits in 8GB VRAM
-# or
-ollama pull gemma4:27b   # recommended for best results, needs ~18GB RAM
+ollama pull gemma4:e4b   # default — Gemma 4 E4B, 9.6 GB, 128K context
+ollama pull gemma4:26b   # higher quality — MoE, 18 GB, 256K context (needs 24 GB+ RAM)
+ollama pull gemma4:31b   # best quality — dense 31B, 20 GB, 256K context (needs 24 GB+ RAM)
 ```
+
+**Gemma 4 model selection guide (Mac Mini M4):**
+
+| Model | Size | RAM needed | Quality |
+|---|---|---|---|
+| `gemma4:e4b` | 9.6 GB | 16 GB | Good — default |
+| `gemma4:26b` | 18 GB | 24 GB | Better — MoE, only 3.8B active params at inference |
+| `gemma4:31b` | 20 GB | 24 GB+ | Best — dense 31B |
 
 **Start the Ollama server** (must be running before `slr run`):
 ```bash
@@ -76,15 +84,17 @@ slr export <run_id>
 | `--hitl cli\|ui` | `cli` | Review mode: terminal prompts or Gradio browser panels |
 | `--no-checkpoints` | off | Skip all gates, run fully automated |
 | `--no-fulltext` | off | Skip full-text PDF fetching (faster) |
-| `--max-results N` | 500 | PubMed search cap per query |
+| `--max-results N` | 500 | Total paper cap across all queries; distributed evenly across query strings |
+| `--model TAG` | `gemma4:e4b` | Ollama model tag (e.g. `gemma4:26b`, `gemma4:31b`) |
 | `--api-key KEY` | env `PUBMED_API_KEY` | PubMed API key (10 req/s vs 3 req/s without) |
 | `--template FILE` | PRISMA default | Manuscript template: JSON schema or PDF reference paper |
+| `--screening-batch-size N` | `3` | Abstracts per LLM call during screening; smaller = more reliable JSON |
 
 ---
 
 ## Pipeline Stages
 
-The pipeline has 7 stages. Each produces structured output saved to `outputs/<run_id>/`. Stages 1, 3, 5, 6, and 7 have human-in-the-loop (HITL) gates by default.
+The pipeline has 7 stages. Each produces structured output saved to `outputs/<run_id>/`. Stages 1, 2, 3, 5, and 7 have human-in-the-loop (HITL) gates by default.
 
 ```
 ① PICO Formulation     — Translates question → PICO + PubMed queries
@@ -96,7 +106,7 @@ The pipeline has 7 stages. Each produces structured output saved to `outputs/<ru
 ⑦ Manuscript           — Sectioned draft + rubric-guided revision loop
 ```
 
-At each HITL gate you can edit, override, or add data before the pipeline continues. At the **Stage 1 gate** you can also edit search configuration (sources, date range, max results). At the **Stage 3 gate** you can first review AI-generated inclusion/exclusion criteria, then review per-paper screening decisions.
+At each HITL gate you can edit, override, or add data before the pipeline continues. At the **Stage 1 gate** you can also edit search configuration (sources, date range, max results). At the **Stage 2 gate** you can exclude papers by PMID or add papers manually. At the **Stage 3 gate** you can first review AI-generated inclusion/exclusion criteria, then review per-paper screening decisions — each paper shows a **criterion scorecard** (`✓`/`✗`/`?` per criterion with a supporting note from the abstract) plus per-paper Include/Uncertain/Exclude override buttons. At the **Stage 5 gate** you can exclude papers and mark quarantined fields for LLM re-verification. At the **Stage 7 gate** you can edit the draft directly, rewrite any section with a custom LLM prompt, or trigger a full LLM revision pass.
 
 ---
 
@@ -109,7 +119,7 @@ outputs/<run_id>/
   stage_1_pico.json              # PICO fields, query strings, detected language
   stage_2_search.json            # papers per query, dedup stats, total retrieved
   stage_3_screening_criteria.json # inclusion/exclusion criteria used for screening
-  stage_3_screening.json         # per-paper decisions
+  stage_3_screening.json         # per-paper decisions + criterion scores
   stage_4_fulltext.json          # full-text fetch stats
   stage_5_extraction.json        # per-paper extracted fields + GRADE + quarantined
   stage_6_synthesis.json         # claims, supporting PMIDs, narrative
@@ -119,6 +129,8 @@ outputs/<run_id>/
   <run_id>_manuscript.md         # final approved manuscript
   <run_id>_manuscript.docx       # Word export (requires Pandoc)
   <run_id>_prisma.md             # PRISMA 2020 flow diagram (Mermaid)
+  llm_trace.jsonl                # every Ollama call: prompt, thinking, response, latency, tokens
+  hitl_trace.jsonl               # every HITL gate: before/after diff, user action
 ```
 
 ---
@@ -127,7 +139,7 @@ outputs/<run_id>/
 
 | Component | Technology |
 |---|---|
-| LLM runtime | Ollama — Gemma 3 12B (default, ~8GB RAM); Gemma 4 26B MoE (4-bit, ~18GB RAM) for best results |
+| LLM runtime | Ollama — Gemma 4 E4B (default, 9.6 GB); `gemma4:26b` MoE (18 GB) or `gemma4:31b` (20 GB) for best results |
 | Orchestration | LangGraph hierarchical subgraphs + SQLite checkpointer |
 | Search | PubMed Entrez (Biopython) + bioRxiv REST API (httpx) |
 | PDF parsing | PyMuPDF |
@@ -138,25 +150,23 @@ outputs/<run_id>/
 | Language | Python 3.11+ |
 | PRISMA diagram | Mermaid |
 
-Gemma 4 26B MoE fits in ~18GB RAM at 4-bit precision, running comfortably on a Mac Mini with 24GB unified memory.
-
 ---
 
 ## Grounding & Audit Trail
 
-Every LLM-extracted value is **fuzzy-matched against its source text** (abstract or full-text, via rapidfuzz token_sort_ratio ≥ 85). On match, the exact character span is stored as provenance. On failure, the field is **quarantined** — kept but flagged, not dropped.
+Every LLM-extracted value is **fuzzy-matched against its source text** (abstract or full-text) using `token_set_ratio` (rapidfuzz). The threshold is source-adaptive: 75 for abstracts (paraphrased summaries), 85 for full text (verbatim). Short values under 20 characters use exact substring search instead. On match, the exact span is stored as provenance. On failure, the field is **quarantined** — kept but flagged, not dropped.
 
 - `slr status <run_id>` shows quarantined field counts
 - Quarantined items appear in HITL gates for manual resolution (accept / edit / discard)
 - Full quarantine table in SQLite for audit
 
-Synthesis claims are grounded separately: Gemma 4 must cite the PMIDs that support each claim. Claims with zero citations are quarantined.
+Synthesis claims are grounded separately: the LLM must cite the PMIDs that support each claim. Claims with zero citations are quarantined.
 
 ---
 
 ## Multi-language Support
 
-Input can be in any language Gemma 4 supports (35+). The pipeline:
+Input can be in any language the model supports. The pipeline:
 1. Detects the source language
 2. Searches PubMed in English
 3. Outputs the manuscript in the detected source language
@@ -192,6 +202,7 @@ slr_agent/
   config.py           # RunConfig TypedDict + DEFAULT_CONFIG
   broker.py           # CheckpointBroker, CLIHandler, UIHandler, NoOpHandler
   emitter.py          # ProgressEmitter (disk + CLI + Gradio fan-out)
+  trace.py            # TraceWriter — llm_trace.jsonl + hitl_trace.jsonl per run
   db.py               # SQLite paper store (PaperRecord, GRADEScore)
   grounding.py        # ExtractionGrounder (rapidfuzz span matching)
   template.py         # Manuscript template loading (JSON / PDF / default PRISMA)
