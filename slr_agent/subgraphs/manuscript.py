@@ -53,6 +53,107 @@ def _build_grade_table(papers: list[dict]) -> str:
         )
     return header + "\n".join(rows)
 
+_ANCHOR_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "anchored": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string"},
+                    "pmids": {"type": "array", "items": {"type": "string"}},
+                    "section": {"type": "string"},
+                },
+                "required": ["claim", "pmids", "section"],
+            },
+        },
+    },
+    "required": ["anchored"],
+}
+
+
+def _verify_citations_node(draft: str, synthesis_path: str, llm) -> str:
+    """Second pass: anchor synthesis claims to PMID citations in the draft.
+
+    Reads grounded claims from the synthesis file (lines matching "- ... [PMIDs]"),
+    asks the LLM which section of the draft each claim appears in, then injects
+    "(PMID: X, Y)" markers at the end of the first matching line per claim.
+
+    Returns the annotated draft string.
+    """
+    import re
+
+    if not draft or not synthesis_path or not os.path.exists(synthesis_path):
+        return draft
+
+    # Parse grounded claims — lines of the form: "- claim text [PMID1, PMID2]"
+    claims = []
+    with open(synthesis_path) as f:
+        for line in f:
+            m = re.match(r"^- (.+) \[([^\]]+)\]$", line.strip())
+            if m:
+                claims.append({
+                    "text": m.group(1).strip(),
+                    "pmids": [p.strip() for p in m.group(2).split(",")],
+                })
+
+    if not claims:
+        return draft
+
+    claims_text = "\n".join(
+        f"- \"{c['text']}\" → PMIDs: {', '.join(c['pmids'])}"
+        for c in claims
+    )
+
+    result = llm.chat([{
+        "role": "user",
+        "content": (
+            "Anchor citations for a systematic review manuscript.\n\n"
+            "Below is the draft and grounded claims with their supporting PMIDs. "
+            "For each claim, identify which section of the manuscript contains a "
+            "sentence making this point, and return the claim, its PMIDs, and the section.\n\n"
+            f"DRAFT:\n{draft[:6000]}\n\n"
+            f"CLAIMS WITH PMIDS:\n{claims_text}\n\n"
+            "Return JSON with field 'anchored': list of {claim, pmids, section}."
+        ),
+    }], schema=_ANCHOR_SCHEMA)
+
+    # Inject "(PMID: X, Y)" after the first line containing the claim key (first 60 chars).
+    # Fallback: if the claim text is not found verbatim, inject at the first non-empty
+    # content line inside the named section.
+    annotated = draft
+    for anchor in result.get("anchored", []):
+        claim_key = anchor["claim"][:60].lower().strip()
+        pmid_tag = " (PMID: " + ", ".join(anchor["pmids"]) + ")"
+        section_name = (anchor.get("section") or "").lower().strip()
+        lines = annotated.split("\n")
+        injected = False
+        # First try: find claim text directly
+        for i, line in enumerate(lines):
+            if claim_key in line.lower() and "(PMID:" not in line:
+                lines[i] = line.rstrip() + pmid_tag
+                injected = True
+                break
+        # Fallback: inject into the named section's first content line
+        if not injected and section_name:
+            in_section = False
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                if stripped.lower() in (f"## {section_name}", f"# {section_name}"):
+                    in_section = True
+                    continue
+                if in_section and stripped.startswith("#"):
+                    break  # reached next section
+                if in_section and stripped and "(PMID:" not in line:
+                    lines[i] = line.rstrip() + pmid_tag
+                    injected = True
+                    break
+        annotated = "\n".join(lines)
+
+    return annotated
+
+
 _TEXT_SCHEMA = {
     "type": "object",
     "properties": {"text": {"type": "string"}},
@@ -169,6 +270,8 @@ def _draft_manuscript_node(state: dict, db: Database, llm, output_dir: str) -> d
                 f"{search_context}\n"
                 f"Synthesis:\n{synthesis_text[:2000]}\n\n"
                 f"Style: {style}{lang_suffix} "
+                "Do NOT include inline citations (no PMID numbers, no author-year, "
+                "no brackets). Citations will be added in a separate verification pass. "
                 "Return JSON with field 'text'."
             ),
         }], schema=_TEXT_SCHEMA)
@@ -187,6 +290,9 @@ def _draft_manuscript_node(state: dict, db: Database, llm, output_dir: str) -> d
         f"# Systematic Review: {pico['intervention']} in {pico['population']}\n\n"
         + "\n\n".join(sections_md)
     )
+
+    # Citation verifier pass — anchors synthesis claims to PMIDs in the draft
+    draft = _verify_citations_node(draft, synthesis_path, llm)
 
     # Write versioned draft
     run_dir = os.path.join(output_dir, run_id)

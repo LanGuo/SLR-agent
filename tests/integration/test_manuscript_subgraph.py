@@ -118,3 +118,51 @@ def test_manuscript_rubric_saved(db, tmp_path):
 
     assert "manuscript_rubric" in result
     assert "scores" in result["manuscript_rubric"]
+
+
+def test_manuscript_citations_come_from_synthesis_claims(db, tmp_path):
+    """Citations in the draft are anchored by the verifier from synthesis claims, not hallucinated."""
+    db.ensure_run("run-cite")
+    synthesis_path = str(tmp_path / "synthesis.md")
+    with open(synthesis_path, "w") as f:
+        f.write("# Evidence Synthesis\n\n## Grounded Claims\n\n"
+                "- Aspirin reduces SBP by 8 mmHg. [99999]\n")
+
+    llm = MockLLM()
+    # Writer drafts without any citation syntax
+    for section in DEFAULT_PRISMA_TEMPLATE["sections"]:
+        llm.register(
+            f"write the {section['name'].lower()} section",
+            {"text": f"Content of {section['name']} without any citations."},
+        )
+    # Verifier: matches "Anchor citations" substring
+    llm.register("Anchor citations", {
+        "anchored": [
+            {"claim": "Aspirin reduces SBP by 8 mmHg.",
+             "pmids": ["99999"],
+             "section": "Results"},
+        ]
+    })
+    # Rubric
+    llm.register("score the following systematic review draft", {"scores": []})
+
+    with patch("slr_agent.subgraphs.manuscript.run_pandoc", return_value=None):
+        graph = create_manuscript_subgraph(db=db, llm=llm, output_dir=str(tmp_path))
+        result = graph.invoke({
+            "run_id": "run-cite",
+            "pico": PICOResult(
+                population="adults with hypertension", intervention="aspirin",
+                comparator="placebo", outcome="blood pressure reduction",
+                query_strings=[], source_language="en",
+                search_language="en", output_language="en",
+            ),
+            "synthesis_path": synthesis_path,
+            "screening_counts": None,
+            "manuscript_path": None,
+            "template": None,
+            "manuscript_draft_version": 0,
+        })
+
+    content = open(result["manuscript_path"]).read()
+    # PMID should be injected by the verifier pass
+    assert "99999" in content

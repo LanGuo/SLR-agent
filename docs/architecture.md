@@ -417,9 +417,10 @@ Three template formats all normalize to the same internal representation:
 | PDF (reference paper) | PyMuPDF text extraction → Gemma 4 infers sections, style, rubric criteria |
 | None | Built-in PRISMA 2020 default (`DEFAULT_PRISMA_TEMPLATE`) |
 
-**Two-pass generation:**
-1. **Draft pass** — the LLM writes each section guided by its `instructions`
-2. **Rubric pass** — the LLM scores each criterion (`met` / `partial` / `not met` + explanation)
+**Three-pass generation:**
+1. **Writer pass (Pass 1)** — the LLM writes each section guided by its `instructions` as pure prose. Section prompts explicitly forbid inline citations: no PMID numbers, no author-year references, no brackets. This eliminates LLM citation hallucination at source.
+2. **Citation verifier pass (Pass 2)** — `_verify_citations_node` reads grounded claims from the synthesis file (lines matching `- claim text [PMID1, PMID2]`), asks the LLM to identify which section of the draft each claim appears in, then injects `(PMID: X, Y)` markers. All PMID anchors come from the synthesis grounding pass, not from the LLM's parametric memory. If no synthesis file exists or contains no grounded claims, the draft is returned unchanged.
+3. **Rubric pass (Pass 3)** — the LLM scores each criterion (`met` / `partial` / `not met` + explanation)
 
 The Stage 7 HITL gate shows the scored rubric alongside the draft. Triggering a revision re-runs Pass 1 targeting only `partial` / `not met` sections.
 
