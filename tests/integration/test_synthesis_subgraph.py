@@ -39,3 +39,48 @@ def test_synthesis_writes_narrative(db, sample_paper, mock_llm, tmp_path):
     assert result["synthesis_path"] is not None
     import os
     assert os.path.exists(result["synthesis_path"])
+
+
+def test_synthesis_returns_unresolved_questions(db, mock_llm, sample_paper):
+    """synthesis_node returns unresolved_questions in state."""
+    import json, os
+    db.ensure_run("run-qs")
+    p = dict(sample_paper)
+    p["run_id"] = "run-qs"
+    db.upsert_paper(p)
+
+    mock_llm.register(
+        "synthesise the evidence",
+        {
+            "claims": [{"text": "Aspirin reduces SBP.", "supporting_pmids": ["99999"]}],
+            "narrative": "Evidence shows aspirin reduces SBP.",
+            "unresolved_questions": [
+                {
+                    "question": "Does the effect persist beyond 12 months?",
+                    "relevant_pmids": ["99999"],
+                    "importance": "high",
+                }
+            ],
+        },
+    )
+
+    from slr_agent.subgraphs.synthesis import create_synthesis_subgraph
+    from slr_agent.state import PICOResult
+    graph = create_synthesis_subgraph(db=db, llm=mock_llm, output_dir="/tmp")
+    result = graph.invoke({
+        "run_id": "run-qs",
+        "pico": PICOResult(
+            population="adults with hypertension", intervention="aspirin",
+            comparator="placebo", outcome="blood pressure reduction",
+            query_strings=[], source_language="en",
+            search_language="en", output_language="en",
+        ),
+        "search_counts": {},
+        "screening_counts": {"n_included": 1, "n_excluded": 0},
+        "fulltext_counts": None,
+        "extraction_counts": {},
+    })
+
+    assert "synthesis_questions" in result
+    assert len(result["synthesis_questions"]) == 1
+    assert result["synthesis_questions"][0]["importance"] == "high"

@@ -284,7 +284,12 @@ def create_orchestrator(
         if synthesis_path and os.path.exists(synthesis_path):
             with open(synthesis_path) as f:
                 synthesis_text = f.read()
-        emit_data = {"synthesis_path": synthesis_path, "preview": synthesis_text[:500]}
+        synthesis_questions = result.get("synthesis_questions") or []
+        emit_data = {
+            "synthesis_path": synthesis_path,
+            "preview": synthesis_text[:500],
+            "unresolved_questions": synthesis_questions,
+        }
         _maybe_pause(6, "synthesis", emit_data, run_id)
         # Note: stage 6 edits (synthesis text) are written directly to synthesis_path
         # by the Gradio panel's on_approve handler; the broker return is not needed here.

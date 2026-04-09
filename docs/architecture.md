@@ -335,6 +335,18 @@ This is intentionally separate from re-extraction — the extracted value itself
 
 A separate LLM-based grounding step: Gemma is asked to cite the PMIDs that support each synthesised claim. Claims with zero citations are quarantined. This is semantic rather than lexical — appropriate for synthesised statements that combine evidence across papers.
 
+### Unresolved questions (Stage 6)
+
+In addition to `claims` and `narrative`, the synthesis LLM now returns an `unresolved_questions` list. Each entry has the shape:
+
+```json
+{"question": "...", "relevant_pmids": ["..."], "importance": "high"}
+```
+
+where `importance` is one of `"high"`, `"medium"`, or `"low"`. These are open questions the available evidence does not resolve.
+
+The questions are stored in state as `synthesis_questions` and emitted at Gate 6 (`stage_6_synthesis.json`) under the key `unresolved_questions`. The reviewer can inspect these gaps before approving the manuscript stage. The `.md` synthesis file written to disk is not changed by this feature.
+
 ---
 
 ## Search Design

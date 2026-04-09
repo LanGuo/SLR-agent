@@ -30,7 +30,9 @@ def _synthesise_node(state: dict, db: Database, llm, output_dir: str) -> dict:
             ) +
             "\n\nReturn JSON with fields:\n"
             "- claims: list of {text, supporting_pmids} — specific grounded claims\n"
-            "- narrative: full narrative synthesis paragraph"
+            "- narrative: full narrative synthesis paragraph\n"
+            "- unresolved_questions: list of {question, relevant_pmids, importance} — "
+            "open questions the evidence does not resolve (importance: high/medium/low)"
         ),
     }], schema={
         "type": "object",
@@ -47,8 +49,20 @@ def _synthesise_node(state: dict, db: Database, llm, output_dir: str) -> dict:
                 },
             },
             "narrative": {"type": "string"},
+            "unresolved_questions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string"},
+                        "relevant_pmids": {"type": "array", "items": {"type": "string"}},
+                        "importance": {"type": "string"},
+                    },
+                    "required": ["question", "relevant_pmids", "importance"],
+                },
+            },
         },
-        "required": ["claims", "narrative"],
+        "required": ["claims", "narrative", "unresolved_questions"],
     })
 
     # Claims with no supporting PMIDs are quarantined
@@ -97,7 +111,11 @@ def _synthesise_node(state: dict, db: Database, llm, output_dir: str) -> dict:
             f.write(f"- {c['text']} [{pmids}]\n")
         f.write(f"\n## PRISMA Flow Diagram\n\n{prisma}\n")
 
-    return {"synthesis_path": synthesis_path}
+    synthesis_questions = result.get("unresolved_questions") or []
+    return {
+        "synthesis_path": synthesis_path,
+        "synthesis_questions": synthesis_questions,
+    }
 
 
 def create_synthesis_subgraph(db: Database, llm, output_dir: str):
