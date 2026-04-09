@@ -166,3 +166,93 @@ def test_manuscript_citations_come_from_synthesis_claims(db, tmp_path):
     content = open(result["manuscript_path"]).read()
     # PMID should be injected by the verifier pass in the citation tag format
     assert "(PMID: 99999)" in content
+
+
+def test_adversarial_review_returns_critique(db, tmp_path):
+    """Adversarial reviewer returns structured issues in result."""
+    db.ensure_run("run-review")
+    synthesis_path = str(tmp_path / "synth.md")
+    with open(synthesis_path, "w") as f:
+        f.write("# Synthesis\n\nAspirin reduces SBP. [99999]\n")
+
+    llm = MockLLM()
+    for section in DEFAULT_PRISMA_TEMPLATE["sections"]:
+        llm.register(f"write the {section['name'].lower()} section",
+                     {"text": f"Content of {section['name']}."})
+    llm.register("Anchor citations", {"anchored": []})
+    llm.register("adversarial reviewer", {
+        "issues": [
+            {"severity": "MAJOR", "section": "Results",
+             "issue": "Confidence interval not reported.",
+             "suggestion": "Add 95% CI to all effect estimates.",
+             "rerun_stage": None},
+        ]
+    })
+    llm.register("score the following systematic review draft", {"scores": []})
+
+    with patch("slr_agent.subgraphs.manuscript.run_pandoc", return_value=None):
+        graph = create_manuscript_subgraph(db=db, llm=llm, output_dir=str(tmp_path))
+        result = graph.invoke({
+            "run_id": "run-review",
+            "pico": PICOResult(
+                population="adults with hypertension", intervention="aspirin",
+                comparator="placebo", outcome="blood pressure reduction",
+                query_strings=[], source_language="en",
+                search_language="en", output_language="en",
+            ),
+            "synthesis_path": synthesis_path,
+            "screening_counts": None,
+            "manuscript_path": None,
+            "template": None,
+            "manuscript_draft_version": 0,
+        })
+
+    assert "adversarial_review" in result
+    issues = result["adversarial_review"]["issues"]
+    assert len(issues) == 1
+    assert issues[0]["severity"] == "MAJOR"
+
+
+def test_adversarial_review_fatal_sets_rerun_stage(db, tmp_path):
+    """FATAL issue with rerun_stage is passed through in result."""
+    db.ensure_run("run-fatal")
+    synthesis_path = str(tmp_path / "synth.md")
+    with open(synthesis_path, "w") as f:
+        f.write("# Synthesis\n\nAspirin reduces SBP. [99999]\n")
+
+    llm = MockLLM()
+    for section in DEFAULT_PRISMA_TEMPLATE["sections"]:
+        llm.register(f"write the {section['name'].lower()} section",
+                     {"text": "Content."})
+    llm.register("Anchor citations", {"anchored": []})
+    llm.register("adversarial reviewer", {
+        "issues": [
+            {"severity": "FATAL", "section": "Methods",
+             "issue": "Inclusion criteria not applied consistently.",
+             "suggestion": "Re-screen abstracts with corrected criteria.",
+             "rerun_stage": "screening"},
+        ]
+    })
+    llm.register("score the following systematic review draft", {"scores": []})
+
+    with patch("slr_agent.subgraphs.manuscript.run_pandoc", return_value=None):
+        graph = create_manuscript_subgraph(db=db, llm=llm, output_dir=str(tmp_path))
+        result = graph.invoke({
+            "run_id": "run-fatal",
+            "pico": PICOResult(
+                population="adults", intervention="aspirin",
+                comparator="placebo", outcome="bp",
+                query_strings=[], source_language="en",
+                search_language="en", output_language="en",
+            ),
+            "synthesis_path": synthesis_path,
+            "screening_counts": None,
+            "manuscript_path": None,
+            "template": None,
+            "manuscript_draft_version": 0,
+        })
+
+    fatal_issues = [i for i in result["adversarial_review"]["issues"]
+                    if i["severity"] == "FATAL"]
+    assert len(fatal_issues) == 1
+    assert fatal_issues[0]["rerun_stage"] == "screening"

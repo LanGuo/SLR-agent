@@ -417,12 +417,17 @@ Three template formats all normalize to the same internal representation:
 | PDF (reference paper) | PyMuPDF text extraction → Gemma 4 infers sections, style, rubric criteria |
 | None | Built-in PRISMA 2020 default (`DEFAULT_PRISMA_TEMPLATE`) |
 
-**Three-pass generation:**
+**Four-pass generation:**
 1. **Writer pass (Pass 1)** — the LLM writes each section guided by its `instructions` as pure prose. Section prompts explicitly forbid inline citations: no PMID numbers, no author-year references, no brackets. This eliminates LLM citation hallucination at source.
 2. **Citation verifier pass (Pass 2)** — `_verify_citations_node` reads grounded claims from the synthesis file (lines matching `- claim text [PMID1, PMID2]`), asks the LLM to identify which section of the draft each claim appears in, then injects `(PMID: X, Y)` markers. All PMID anchors come from the synthesis grounding pass, not from the LLM's parametric memory. If no synthesis file exists or contains no grounded claims, the draft is returned unchanged.
-3. **Rubric pass (Pass 3)** — the LLM scores each criterion (`met` / `partial` / `not met` + explanation)
+3. **Adversarial reviewer pass (Pass 3)** — `_adversarial_review_node` runs with `think=True` for careful reasoning and returns a structured list of issues with three severity levels:
+   - `FATAL`: the manuscript is wrong or misleading in a way requiring a prior pipeline stage to be rerun. The `rerun_stage` field names the stage (`screening` | `extraction` | `synthesis`). The orchestrator handles this automatically (bounded to one retry) before Gate 7.
+   - `MAJOR`: a significant flaw the human must address before submission.
+   - `MINOR`: a style, clarity, or minor accuracy issue.
+   All issues are stored in `adversarial_review` in state and surfaced in Gate 7 checkpoint data so the human reviewer sees them. On LLM failure, the node degrades gracefully and returns `{"issues": []}`.
+4. **Rubric pass (Pass 4)** — the LLM scores each criterion (`met` / `partial` / `not met` + explanation)
 
-The Stage 7 HITL gate shows the scored rubric alongside the draft. Triggering a revision re-runs Pass 1 targeting only `partial` / `not met` sections.
+The Stage 7 HITL gate shows the scored rubric, adversarial review issues, and the draft. Triggering a revision re-runs Pass 1 targeting only `partial` / `not met` sections.
 
 ### Hallucination prevention
 

@@ -306,6 +306,33 @@ def create_orchestrator(
         result = manuscript_sg.invoke({**state, "template": template})
         current_state = {**state, **result, "template": template}
 
+        # Handle FATAL adversarial issues that require prior-stage reruns.
+        # Bounded to one retry to prevent infinite loops.
+        adversarial = result.get("adversarial_review", {})
+        fatal_issues = [
+            i for i in adversarial.get("issues", [])
+            if i.get("severity") == "FATAL" and i.get("rerun_stage")
+        ]
+        if fatal_issues:
+            rerun_stages = {i["rerun_stage"] for i in fatal_issues}
+            _get_emitter(run_id).log(
+                f"Adversarial reviewer flagged FATAL issues — auto-rerunning: "
+                f"{', '.join(sorted(rerun_stages))}"
+            )
+            if "screening" in rerun_stages:
+                screening_result = screening_sg.invoke(current_state)
+                current_state = {**current_state, **screening_result}
+            if "extraction" in rerun_stages or "screening" in rerun_stages:
+                extraction_result = extraction_sg.invoke(current_state)
+                current_state = {**current_state, **extraction_result}
+            if "synthesis" in rerun_stages or "extraction" in rerun_stages or "screening" in rerun_stages:
+                synthesis_result = synthesis_sg.invoke(current_state)
+                current_state = {**current_state, **synthesis_result}
+            # Redraft once after rerun
+            result = manuscript_sg.invoke({**current_state, "template": template})
+            current_state = {**current_state, **result, "template": template}
+            adversarial = result.get("adversarial_review", {})
+
         # Stage 7 revision loop
         if 7 in checkpoint_stages:
             while True:
@@ -319,6 +346,7 @@ def create_orchestrator(
                     "draft": draft,
                     "rubric": rubric,
                     "draft_version": result.get("manuscript_draft_version", 1),
+                    "adversarial_review": result.get("adversarial_review", {"issues": []}),
                 }
                 _get_emitter(run_id).emit(7, {"rubric": rubric, "draft_version": checkpoint_data["draft_version"]})
                 edited = _broker.pause(7, "manuscript", checkpoint_data)

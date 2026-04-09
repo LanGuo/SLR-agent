@@ -161,6 +161,67 @@ def _verify_citations_node(draft: str, synthesis_path: str, llm) -> str:
     return annotated
 
 
+_REVIEW_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "issues": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "severity": {"type": "string", "enum": ["FATAL", "MAJOR", "MINOR"]},
+                    "section": {"type": "string"},
+                    "issue": {"type": "string"},
+                    "suggestion": {"type": "string"},
+                    "rerun_stage": {"type": ["string", "null"]},
+                },
+                "required": ["severity", "section", "issue", "suggestion", "rerun_stage"],
+            },
+        },
+    },
+    "required": ["issues"],
+}
+
+
+def _adversarial_review_node(draft: str, synthesis_path: str, llm) -> dict:
+    """Adversarial reviewer: critiques the draft with FATAL/MAJOR/MINOR severity.
+
+    FATAL issues may name a prior pipeline stage to rerun (rerun_stage: screening |
+    extraction | synthesis | null). All issues are returned as a dict for the
+    orchestrator to surface at Gate 7 or trigger automatic reruns.
+
+    Returns {"issues": [...]} — empty list on LLM failure (non-fatal degradation).
+    """
+    synthesis_text = ""
+    if synthesis_path and os.path.exists(synthesis_path):
+        with open(synthesis_path) as f:
+            synthesis_text = f.read()
+
+    try:
+        result = llm.chat([{
+            "role": "user",
+            "content": (
+                "You are an adversarial reviewer for a systematic review manuscript. "
+                "Find every flaw, gap, and inconsistency in this draft before it reaches "
+                "a human editor.\n\n"
+                "Severity levels:\n"
+                "- FATAL: the manuscript is wrong or misleading in a way that requires "
+                "redoing a prior pipeline stage (name the stage in rerun_stage: "
+                "screening | extraction | synthesis | null)\n"
+                "- MAJOR: a significant flaw the human must address before submission\n"
+                "- MINOR: a style, clarity, or minor accuracy issue\n\n"
+                f"MANUSCRIPT DRAFT:\n{draft[:8000]}\n\n"
+                f"SYNTHESIS:\n{synthesis_text[:2000]}\n\n"
+                "Return JSON with field 'issues': list of "
+                "{severity, section, issue, suggestion, rerun_stage}."
+            ),
+        }], schema=_REVIEW_SCHEMA, think=True)
+    except Exception:
+        return {"issues": []}
+
+    return result if isinstance(result, dict) and "issues" in result else {"issues": []}
+
+
 _TEXT_SCHEMA = {
     "type": "object",
     "properties": {"text": {"type": "string"}},
@@ -301,6 +362,9 @@ def _draft_manuscript_node(state: dict, db: Database, llm, output_dir: str) -> d
     # Citation verifier pass — anchors synthesis claims to PMIDs in the draft
     draft = _verify_citations_node(draft, synthesis_path, llm)
 
+    # Adversarial reviewer pass — structured critique before Gate 7
+    adversarial_review = _adversarial_review_node(draft, synthesis_path, llm)
+
     # Write versioned draft
     run_dir = os.path.join(output_dir, run_id)
     os.makedirs(run_dir, exist_ok=True)
@@ -327,6 +391,7 @@ def _draft_manuscript_node(state: dict, db: Database, llm, output_dir: str) -> d
         "manuscript_path": md_path,
         "manuscript_rubric": {**rubric_result, "template": template},
         "manuscript_draft_version": draft_version,
+        "adversarial_review": adversarial_review,
     }
 
 
