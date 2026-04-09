@@ -2,7 +2,7 @@
 import base64
 from langgraph.graph import StateGraph, END
 from slr_agent.db import Database, GRADEScore
-from slr_agent.grounding import ExtractionGrounder
+from slr_agent.grounding import ExtractionGrounder, GroundedField
 from slr_agent.state import ExtractionCounts
 
 
@@ -35,6 +35,53 @@ def _load_page_images_b64(page_image_paths: list[str], max_images: int = 8) -> l
         except OSError:
             pass
     return images
+
+
+_LLM_GROUND_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "supported": {"type": "boolean"},
+        "span": {"type": "string"},
+    },
+    "required": ["supported", "span"],
+}
+
+
+def _auto_llm_ground(
+    quarantined_fields: list,
+    source_text: str,
+    pmid: str,
+    llm,
+) -> tuple[dict, list]:
+    """Try LLM grounding on each quarantined field.
+
+    Returns (promoted, remaining):
+      promoted — dict of field_name → value for fields confirmed by LLM
+      remaining — quarantined fields that LLM also could not confirm
+    """
+    promoted: dict[str, str] = {}
+    remaining = []
+    for qf in quarantined_fields:
+        field = qf.get("field_name", "")
+        value = qf.get("value", "")
+        result = llm.chat([{
+            "role": "user",
+            "content": (
+                f"You are verifying an extracted field for a systematic review.\n\n"
+                f"Field: {field}\n"
+                f"Extracted value: \"{value}\"\n\n"
+                f"Source text:\n{source_text[:6000]}\n\n"
+                "Does the source text support this value, even if phrased differently "
+                "(e.g. paraphrased, abbreviated, or expressed as a number vs words)? "
+                "Return JSON: {\"supported\": true or false, "
+                "\"span\": \"the relevant quote from the source, or empty string\"}"
+            ),
+        }], schema=_LLM_GROUND_SCHEMA)
+        if result.get("supported"):
+            promoted[field] = value
+        else:
+            remaining.append(qf)
+    return promoted, remaining
 
 
 def _extract_node(state: dict, db: Database, llm) -> dict:
@@ -85,6 +132,22 @@ def _extract_node(state: dict, db: Database, llm) -> dict:
             source=source_type,
             stage="extraction",
         )
+        # Auto LLM grounding: give quarantined fields a second chance before
+        # writing them to the quarantine table.
+        if quarantined_fields:
+            promoted, still_quarantined = _auto_llm_ground(
+                quarantined_fields, source_text, pmid, llm
+            )
+            # Merge promoted fields into grounded (mark provenance_type as inferred)
+            for field_name, value in promoted.items():
+                grounded[field_name] = GroundedField(
+                    value=value,
+                    span=None,  # LLM confirmed but no character span available
+                    confidence=80.0,
+                    status="grounded",
+                )
+            quarantined_fields = still_quarantined
+
         for qf in quarantined_fields:
             db.insert_quarantine(run_id, pmid, qf)
 

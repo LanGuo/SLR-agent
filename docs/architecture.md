@@ -321,15 +321,15 @@ The `provenance_type` field records *how* each extracted value was matched to it
 - PRISMA flow diagram includes quarantine counts as a data quality signal
 - Full quarantine table queryable via SQLite or `slr status <run_id>`
 
-### LLM-based grounding (Stage 5 gate)
+### Auto LLM grounding (Stage 5, automatic)
 
-Fuzzy matching fails on valid extractions that are heavily paraphrased, abbreviated, or expressed differently (e.g. `"96"` vs `"ninety-six"`, `"MI"` vs `"myocardial infarction"`). At the Stage 5 gate the user can check **LLM ground** on any paper to trigger a second-pass LLM grounding run on that paper's quarantined fields:
+Fuzzy matching fails on valid extractions that are heavily paraphrased, abbreviated, or expressed differently (e.g. `"96"` vs `"ninety-six"`, `"MI"` vs `"myocardial infarction"`). After fuzzy grounding runs inside `extraction.py`, any quarantined fields automatically get a second-chance LLM grounding pass before they are written to the quarantine table (`_auto_llm_ground`):
 
 1. For each quarantined field, the LLM is asked: *"Does the source text support this value, even if phrased differently?"*
-2. Fields confirmed (`supported: true`) are moved into `extracted_data`
-3. Fields not confirmed remain quarantined
+2. Fields confirmed (`supported: true`) are promoted into `extracted_data` with `confidence=80.0` and `span=None` (LLM does not return character offsets; `provenance_type="inferred"` will be set once span construction is added)
+3. Fields not confirmed are written to the quarantine table as before
 
-This is intentionally separate from re-extraction — the extracted value itself is not changed, only its quarantine status.
+This is intentionally separate from re-extraction — the extracted value itself is not changed, only its quarantine status. The manual "LLM Ground" button at Gate 5 has been removed; auto-grounding replaces it for all papers.
 
 ### Synthesis grounding (Stage 6)
 
@@ -461,7 +461,7 @@ LangGraph's `SqliteSaver` is used as the graph checkpointer. After every node co
 |---|---|---|
 | 1, 3, 6 | Generic | Editable `gr.Code(language="json")` block + Approve button |
 | 2 | Search | `gr.Dataframe` with Exclude bool column; PMID add textbox; Approve button |
-| 5 | Extraction | `gr.Dataframe` with Exclude/LLM ground bool columns; row-click shows extracted and quarantined fields in two `gr.Code` panels |
+| 5 | Extraction | `gr.Dataframe` with Exclude bool column; row-click shows extracted and quarantined fields in two `gr.Code` panels (LLM grounding now runs automatically before Gate 5; the manual LLM Ground button has been removed) |
 | 7 | Manuscript | Editable draft (`gr.Code`, interactive); section-rewrite accordion (section name + instruction → LLM rewrites section in-place); rubric scores; Approve / Full Revise buttons |
 
 **Implementation notes:**
