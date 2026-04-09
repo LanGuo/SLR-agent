@@ -1,5 +1,6 @@
 # slr_agent/subgraphs/manuscript.py
 import os
+import re
 from langgraph.graph import StateGraph, END
 from slr_agent.db import Database
 from slr_agent.export import run_pandoc
@@ -82,8 +83,6 @@ def _verify_citations_node(draft: str, synthesis_path: str, llm) -> str:
 
     Returns the annotated draft string.
     """
-    import re
-
     if not draft or not synthesis_path or not os.path.exists(synthesis_path):
         return draft
 
@@ -106,18 +105,24 @@ def _verify_citations_node(draft: str, synthesis_path: str, llm) -> str:
         for c in claims
     )
 
-    result = llm.chat([{
-        "role": "user",
-        "content": (
-            "Anchor citations for a systematic review manuscript.\n\n"
-            "Below is the draft and grounded claims with their supporting PMIDs. "
-            "For each claim, identify which section of the manuscript contains a "
-            "sentence making this point, and return the claim, its PMIDs, and the section.\n\n"
-            f"DRAFT:\n{draft[:6000]}\n\n"
-            f"CLAIMS WITH PMIDS:\n{claims_text}\n\n"
-            "Return JSON with field 'anchored': list of {claim, pmids, section}."
-        ),
-    }], schema=_ANCHOR_SCHEMA)
+    try:
+        result = llm.chat([{
+            "role": "user",
+            "content": (
+                "Anchor citations for a systematic review manuscript.\n\n"
+                "Below is the draft and grounded claims with their supporting PMIDs. "
+                "For each claim, identify which section of the manuscript contains a "
+                "sentence making this point, and return the claim, its PMIDs, and the section.\n\n"
+                # Draft truncated to 6000 chars for LLM context budget.
+                # Claims appearing in sections past this point fall back to section-header injection.
+                f"DRAFT:\n{draft[:6000]}\n\n"
+                f"CLAIMS WITH PMIDS:\n{claims_text}\n\n"
+                "Return JSON with field 'anchored': list of {claim, pmids, section}."
+            ),
+        }], schema=_ANCHOR_SCHEMA)
+    except Exception:
+        # Citation anchoring is non-critical; degrade gracefully on LLM failure
+        return draft
 
     # Inject "(PMID: X, Y)" after the first line containing the claim key (first 60 chars).
     # Fallback: if the claim text is not found verbatim, inject at the first non-empty
@@ -127,6 +132,8 @@ def _verify_citations_node(draft: str, synthesis_path: str, llm) -> str:
         claim_key = anchor["claim"][:60].lower().strip()
         pmid_tag = " (PMID: " + ", ".join(anchor["pmids"]) + ")"
         section_name = (anchor.get("section") or "").lower().strip()
+        # Inject into the first line containing the claim text.
+        # If two claims match the same line, the second falls through to the section fallback.
         lines = annotated.split("\n")
         injected = False
         # First try: find claim text directly

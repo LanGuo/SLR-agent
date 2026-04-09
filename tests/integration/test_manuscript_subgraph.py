@@ -164,5 +164,5 @@ def test_manuscript_citations_come_from_synthesis_claims(db, tmp_path):
         })
 
     content = open(result["manuscript_path"]).read()
-    # PMID should be injected by the verifier pass
-    assert "99999" in content
+    # PMID should be injected by the verifier pass in the citation tag format
+    assert "(PMID: 99999)" in content
