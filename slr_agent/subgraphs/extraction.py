@@ -6,6 +6,12 @@ from slr_agent.grounding import ExtractionGrounder, GroundedField
 from slr_agent.state import ExtractionCounts
 
 
+# Confidence assigned to LLM-confirmed fields (auto-grounding pass).
+# Sits between the abstract fuzzy threshold (75) and fulltext threshold (85);
+# reflects LLM confirmation without a character-level span.
+_LLM_GROUND_CONFIDENCE = 80.0
+
+
 _EXTRACTION_SCHEMA = {
     "type": "object",
     "properties": {
@@ -50,7 +56,6 @@ _LLM_GROUND_SCHEMA = {
 def _auto_llm_ground(
     quarantined_fields: list,
     source_text: str,
-    pmid: str,
     llm,
 ) -> tuple[dict, list]:
     """Try LLM grounding on each quarantined field.
@@ -81,6 +86,9 @@ def _auto_llm_ground(
             promoted[field] = value
         else:
             remaining.append(qf)
+    # TODO: construct Span with provenance_type="inferred" once the LLM returns
+    # a character-level span. For now, span=None; provenance is untracked for
+    # LLM-confirmed fields. See Span TypedDict in db.py.
     return promoted, remaining
 
 
@@ -133,17 +141,20 @@ def _extract_node(state: dict, db: Database, llm) -> dict:
             stage="extraction",
         )
         # Auto LLM grounding: give quarantined fields a second chance before
-        # writing them to the quarantine table.
+        # writing them to the quarantine table. Failures are non-fatal — a grounding
+        # error leaves the field quarantined rather than aborting the extraction run.
         if quarantined_fields:
-            promoted, still_quarantined = _auto_llm_ground(
-                quarantined_fields, source_text, pmid, llm
-            )
-            # Merge promoted fields into grounded (mark provenance_type as inferred)
+            try:
+                promoted, still_quarantined = _auto_llm_ground(
+                    quarantined_fields, source_text, llm
+                )
+            except Exception:
+                promoted, still_quarantined = {}, quarantined_fields
             for field_name, value in promoted.items():
                 grounded[field_name] = GroundedField(
                     value=value,
                     span=None,  # LLM confirmed but no character span available
-                    confidence=80.0,
+                    confidence=_LLM_GROUND_CONFIDENCE,
                     status="grounded",
                 )
             quarantined_fields = still_quarantined
