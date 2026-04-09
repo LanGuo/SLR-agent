@@ -15,6 +15,7 @@ class Span(TypedDict):
     char_start: int
     char_end: int
     text: str
+    # "inferred" is set by the auto LLM grounding pass in extraction.py (Task 2)
     provenance_type: Literal["direct", "paraphrased", "inferred"]
 
 

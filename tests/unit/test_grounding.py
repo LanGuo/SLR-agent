@@ -96,6 +96,7 @@ def test_exact_match_sets_direct_provenance():
 
 
 def test_fuzzy_match_sets_paraphrased_provenance():
+    # No explicit threshold: uses source-adaptive default (75 for "abstract")
     grounder = ExtractionGrounder()
     result = grounder.ground_field(
         field_name="result",

@@ -303,7 +303,7 @@ Fuzzy matching on strings shorter than 20 characters (e.g. sample sizes like `"9
 
 ### Span location
 
-When a value passes the threshold check, its location in the source text is recorded as a `Span(char_start, char_end, text, provenance_type)` for provenance. Span location uses **sentence-level chunking** (windows of 3 sentences scored with `token_set_ratio`) rather than a character-by-character sliding window, which was O(n) fuzzy calls for a 6000-character source text.
+When a value passes the threshold check, its location in the source text is recorded as a `Span(pmid, source, char_start, char_end, text, provenance_type)` for provenance. Span location uses **sentence-level chunking** (windows of 3 sentences scored with `token_set_ratio`) rather than a character-by-character sliding window, which was O(n) fuzzy calls for a 6000-character source text.
 
 The `provenance_type` field records *how* each extracted value was matched to its source:
 
