@@ -173,7 +173,10 @@ _REVIEW_SCHEMA = {
                     "section": {"type": "string"},
                     "issue": {"type": "string"},
                     "suggestion": {"type": "string"},
-                    "rerun_stage": {"type": ["string", "null"]},
+                    "rerun_stage": {
+                        "type": ["string", "null"],
+                        "enum": ["screening", "extraction", "synthesis", None],
+                    },
                 },
                 "required": ["severity", "section", "issue", "suggestion", "rerun_stage"],
             },
@@ -216,7 +219,10 @@ def _adversarial_review_node(draft: str, synthesis_path: str, llm) -> dict:
                 "{severity, section, issue, suggestion, rerun_stage}."
             ),
         }], schema=_REVIEW_SCHEMA, think=True)
-    except Exception:
+    except Exception as exc:
+        # Non-fatal: degrade to empty review rather than aborting the draft
+        import traceback
+        traceback.print_exc()
         return {"issues": []}
 
     return result if isinstance(result, dict) and "issues" in result else {"issues": []}
