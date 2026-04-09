@@ -53,7 +53,8 @@ class ExtractionGrounder:
                     value=value,
                     span=Span(pmid=pmid, source=source,
                               char_start=idx, char_end=idx + len(value),
-                              text=source_text[idx: idx + len(value)]),
+                              text=source_text[idx: idx + len(value)],
+                              provenance_type="direct"),
                     confidence=100.0,
                     status="grounded",
                 )
@@ -94,7 +95,8 @@ class ExtractionGrounder:
             value=value,
             span=Span(pmid=pmid, source=source,
                       char_start=best_start, char_end=best_end,
-                      text=source_text[best_start:best_end]),
+                      text=source_text[best_start:best_end],
+                      provenance_type="paraphrased"),
             confidence=overall_score,
             status="grounded",
         )

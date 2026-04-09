@@ -303,7 +303,15 @@ Fuzzy matching on strings shorter than 20 characters (e.g. sample sizes like `"9
 
 ### Span location
 
-When a value passes the threshold check, its location in the source text is recorded as a `Span(char_start, char_end, text)` for provenance. Span location uses **sentence-level chunking** (windows of 3 sentences scored with `token_set_ratio`) rather than a character-by-character sliding window, which was O(n) fuzzy calls for a 6000-character source text.
+When a value passes the threshold check, its location in the source text is recorded as a `Span(char_start, char_end, text, provenance_type)` for provenance. Span location uses **sentence-level chunking** (windows of 3 sentences scored with `token_set_ratio`) rather than a character-by-character sliding window, which was O(n) fuzzy calls for a 6000-character source text.
+
+The `provenance_type` field records *how* each extracted value was matched to its source:
+
+| Value | Meaning |
+|---|---|
+| `"direct"` | Verbatim substring match — the extracted value appears exactly in the source text (case-insensitive). Used for short values (< 20 chars). |
+| `"paraphrased"` | Fuzzy token match — the value was matched via `token_set_ratio` against a sentence window. Used for longer values that may differ in word order or wording. |
+| `"inferred"` | LLM-confirmed — the span was located by a second-pass LLM grounding call (set by auto-grounding in Stage 5 extraction, not by the fuzzy grounder). |
 
 ### Quarantine behaviour
 

@@ -80,3 +80,29 @@ def test_synthesis_grounding_quarantines_unsupported_claim(mock_llm):
         paper_extractions=[{"pmid": "1", "result": "modest effect"}],
     )
     assert result["status"] == "quarantined"
+
+
+def test_exact_match_sets_direct_provenance():
+    grounder = ExtractionGrounder()
+    result = grounder.ground_field(
+        field_name="sample_size",
+        value="500 adults",   # verbatim in ABSTRACT
+        source_text=ABSTRACT,
+        pmid="1",
+        source="abstract",
+    )
+    assert result["status"] == "grounded"
+    assert result["span"]["provenance_type"] == "direct"
+
+
+def test_fuzzy_match_sets_paraphrased_provenance():
+    grounder = ExtractionGrounder()
+    result = grounder.ground_field(
+        field_name="result",
+        value="aspirin 100mg daily or placebo for 12 months mean SBP reduction 8.2 mmHg",
+        source_text=ABSTRACT,
+        pmid="1",
+        source="abstract",
+    )
+    assert result["status"] == "grounded"
+    assert result["span"]["provenance_type"] == "paraphrased"

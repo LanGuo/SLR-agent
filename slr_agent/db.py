@@ -15,6 +15,7 @@ class Span(TypedDict):
     char_start: int
     char_end: int
     text: str
+    provenance_type: Literal["direct", "paraphrased", "inferred"]
 
 
 class QuarantinedField(TypedDict):
