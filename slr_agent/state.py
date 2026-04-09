@@ -53,3 +53,4 @@ class OrchestratorState(TypedDict):
     date_from: str | None              # search date range start, e.g. "2000-01-01"
     date_to: str | None                # search date range end, e.g. "2026-12-31"
     screening_criteria: dict | None    # {inclusion_criteria, exclusion_criteria, study_designs}
+    unresolved_questions: list[dict] | None  # open questions from synthesis (importance: high/medium/low)

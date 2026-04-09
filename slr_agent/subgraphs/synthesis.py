@@ -56,7 +56,7 @@ def _synthesise_node(state: dict, db: Database, llm, output_dir: str) -> dict:
                     "properties": {
                         "question": {"type": "string"},
                         "relevant_pmids": {"type": "array", "items": {"type": "string"}},
-                        "importance": {"type": "string"},
+                        "importance": {"type": "string", "enum": ["high", "medium", "low"]},
                     },
                     "required": ["question", "relevant_pmids", "importance"],
                 },
@@ -111,10 +111,9 @@ def _synthesise_node(state: dict, db: Database, llm, output_dir: str) -> dict:
             f.write(f"- {c['text']} [{pmids}]\n")
         f.write(f"\n## PRISMA Flow Diagram\n\n{prisma}\n")
 
-    synthesis_questions = result.get("unresolved_questions") or []
     return {
         "synthesis_path": synthesis_path,
-        "synthesis_questions": synthesis_questions,
+        "unresolved_questions": result.get("unresolved_questions") or [],
     }
 
 

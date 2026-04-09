@@ -43,7 +43,6 @@ def test_synthesis_writes_narrative(db, sample_paper, mock_llm, tmp_path):
 
 def test_synthesis_returns_unresolved_questions(db, mock_llm, sample_paper):
     """synthesis_node returns unresolved_questions in state."""
-    import json, os
     db.ensure_run("run-qs")
     p = dict(sample_paper)
     p["run_id"] = "run-qs"
@@ -81,6 +80,6 @@ def test_synthesis_returns_unresolved_questions(db, mock_llm, sample_paper):
         "extraction_counts": {},
     })
 
-    assert "synthesis_questions" in result
-    assert len(result["synthesis_questions"]) == 1
-    assert result["synthesis_questions"][0]["importance"] == "high"
+    assert "unresolved_questions" in result
+    assert len(result["unresolved_questions"]) == 1
+    assert result["unresolved_questions"][0]["importance"] == "high"

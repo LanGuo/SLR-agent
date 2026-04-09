@@ -135,6 +135,7 @@ class OrchestratorState(TypedDict):
     search_sources: list[str]      # ["pubmed"] | ["pubmed", "biorxiv"]
     max_results: int
     screening_criteria: dict | None  # {inclusion_criteria, exclusion_criteria, study_designs}
+    unresolved_questions: list[dict] | None  # open questions from synthesis (importance: high/medium/low)
     current_stage: str
     checkpoint_pending: bool
 ```
