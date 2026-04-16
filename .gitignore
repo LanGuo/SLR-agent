@@ -1,8 +1,13 @@
 __pycache__/
 *.py[cod]
 .env
+
+# Database files (run-generated)
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
+
 .superpowers/
 dist/
 *.egg-info/
@@ -11,5 +16,10 @@ outputs/
 
 .DS_Store
 uv.lock
-docs/kaggle_writeup_draft.md
+
+# Internal / superpowers-generated docs
 docs/superpowers/
+
+# Kaggle / external writeup drafts
+docs/k*.md
+docs/kaggle*.md
