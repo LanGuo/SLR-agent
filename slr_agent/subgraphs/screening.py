@@ -52,7 +52,9 @@ def _derive_decision(criterion_scores: list[dict]) -> str:
 def _screen_abstracts_node(state: dict, db: Database, llm) -> dict:
     run_id = state["run_id"]
     pico = state["pico"]
-    papers = db.get_all_papers(run_id)
+    # Skip papers already pinned by the user at Gate 2 — re-screening them would
+    # overwrite the manual exclusion with whatever the LLM decides.
+    papers = [p for p in db.get_all_papers(run_id) if p["screening_decision"] != "excluded_manual"]
     grounder = ExtractionGrounder()
     batch_size = state.get("config", {}).get("screening_batch_size", _DEFAULT_BATCH_SIZE)
 

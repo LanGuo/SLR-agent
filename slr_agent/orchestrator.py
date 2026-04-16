@@ -166,6 +166,17 @@ def create_orchestrator(
             elif p.get("manual_add") and pmid and pmid not in existing_pmids:
                 _get_emitter(run_id).log(f"Fetching manually added paper: {pmid}")
                 db.add_paper_from_pmid(run_id, pmid, api_key=cfg.get("pubmed_api_key"))
+        # Re-emit stage 2 with exclusion state applied so the on-disk file reflects
+        # what actually proceeds to screening (same pattern as pico_node re-emit).
+        all_papers_after = db.get_all_papers(run_id)
+        _get_emitter(run_id).emit(2, {
+            **dict(counts or {}),
+            "papers": [
+                {"pmid": p["pmid"], "title": p["title"], "source": p["source"],
+                 "excluded": p["screening_decision"] == "excluded_manual"}
+                for p in all_papers_after
+            ],
+        })
         return {**state, **result, "current_stage": "search_done"}
 
     def screening_node(state: dict) -> dict:

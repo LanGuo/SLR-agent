@@ -43,7 +43,7 @@ class PaperRecord(TypedDict):
     fulltext: str | None
     page_image_paths: list[str]   # paths to PNG page renders for multimodal extraction
     source: Literal["abstract", "fulltext"]
-    screening_decision: Literal["include", "exclude", "uncertain"]
+    screening_decision: Literal["include", "exclude", "uncertain", "excluded_manual"]
     screening_reason: str
     criterion_scores: list[dict]   # per-criterion scores from screening LLM
     extracted_data: dict
