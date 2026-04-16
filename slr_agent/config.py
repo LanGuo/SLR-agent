@@ -7,7 +7,7 @@ class RunConfig(TypedDict, total=False):
     output_format: Literal["markdown", "word", "both"]  # default "both"
     pubmed_api_key: str | None     # raises PubMed rate limit to 10 req/s
     max_results: int               # total cap per source; distributed across query strings for PubMed
-    search_sources: list[Literal["pubmed", "biorxiv"]]  # default ["pubmed", "biorxiv"]
+    search_sources: list[Literal["pubmed", "biorxiv", "arxiv"]]  # default ["pubmed", "biorxiv"]
     template_path: str | None      # path to JSON schema or PDF template
     hitl_mode: Literal["cli", "ui", "none"]  # default "cli"
     date_from: str | None          # search date range start, e.g. "2000-01-01"

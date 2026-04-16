@@ -17,6 +17,7 @@ class SearchCounts(TypedDict):
     n_duplicates_removed: int
     n_pubmed: int          # papers actually stored from PubMed efetch
     n_biorxiv: int         # papers stored from bioRxiv
+    n_arxiv: int           # papers stored from arXiv
 
 class ScreeningCounts(TypedDict):
     n_included: int

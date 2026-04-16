@@ -258,7 +258,7 @@ def _draft_manuscript_node(state: dict, db: Database, llm, output_dir: str) -> d
     # Build a factual search context block from actual run state so the LLM
     # does not hallucinate databases, dates, or PRISMA counts.
     sources = state.get("search_sources") or ["pubmed"]
-    source_labels = {"pubmed": "PubMed/MEDLINE", "biorxiv": "bioRxiv"}
+    source_labels = {"pubmed": "PubMed/MEDLINE", "biorxiv": "bioRxiv", "arxiv": "arXiv"}
     sources_str = ", ".join(source_labels.get(s, s) for s in sources)
     date_from = state.get("date_from") or "2000-01-01"
     date_to = state.get("date_to") or "present"

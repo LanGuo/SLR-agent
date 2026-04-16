@@ -1,5 +1,7 @@
 # slr_agent/subgraphs/search.py
+import re
 import time
+import xml.etree.ElementTree as ET
 import httpx
 from typing import Optional
 from typing_extensions import TypedDict
@@ -20,6 +22,7 @@ class SearchSubgraphState(TypedDict, total=False):
     _pubmed_pmids: list[str]
     _pubmed_count: int
     _biorxiv_count: int
+    _arxiv_count: int
 
 
 _DEFAULT_GRADE = GRADEScore(
@@ -139,7 +142,12 @@ def _search_biorxiv_node(state: dict, db: Database) -> dict:
     bioRxiv has no keyword search API — we fetch recent preprints and store them.
     Semantic filtering by PICO relevance happens in the Screening stage (stage 3)
     using Gemma 4, which is the appropriate place for LLM-based filtering.
+
+    Self-gating: returns immediately if "biorxiv" is not in search_sources.
     """
+    if "biorxiv" not in state.get("search_sources", []):
+        return {"_biorxiv_count": 0}
+
     run_id = state["run_id"]
     max_results = state.get("max_results", 500)
     date_from = state.get("date_from", "2000-01-01")
@@ -174,40 +182,115 @@ def _search_biorxiv_node(state: dict, db: Database) -> dict:
 
     return {"_biorxiv_count": biorxiv_count}
 
+
+_ARXIV_NS = "http://www.w3.org/2005/Atom"
+_ARXIV_RATE_LIMIT_S = 3.0  # arXiv API terms require ≥3 s between requests
+
+
+def _build_arxiv_query(query_strings: list[str]) -> str:
+    """Convert PICO query strings (PubMed syntax) to arXiv all: keyword queries.
+
+    Strips PubMed-specific syntax ([MeSH], [tiab], etc.) and joins with OR.
+    """
+    clean_terms = []
+    for qs in query_strings:
+        # Strip field tags like [MeSH Terms], [tiab], [Text Word], etc.
+        cleaned = re.sub(r"\[[^\]]+\]", "", qs)
+        # Collapse whitespace
+        cleaned = " ".join(cleaned.split())
+        if cleaned:
+            clean_terms.append(f"all:{cleaned}")
+    return " OR ".join(clean_terms) if clean_terms else "all:biomedical"
+
+
+def _search_arxiv_node(state: dict, db: Database) -> dict:
+    """Search arXiv preprints via the arXiv Atom API.
+
+    Uses PICO query strings (with PubMed syntax stripped) to keyword-search arXiv.
+    Self-gating: returns immediately if "arxiv" is not in search_sources.
+
+    pmid proxy format: arxiv:{arxiv_id}  (e.g. arxiv:2301.12345)
+    """
+    if "arxiv" not in state.get("search_sources", []):
+        return {"_arxiv_count": 0}
+
+    run_id = state["run_id"]
+    pico = state["pico"]
+    max_results = state.get("max_results", 500)
+    arxiv_count = 0
+
+    query = _build_arxiv_query(pico.get("query_strings", []))
+
+    try:
+        resp = httpx.get(
+            "https://export.arxiv.org/api/query",
+            params={"search_query": query, "start": 0, "max_results": max_results},
+            timeout=60,
+        )
+        resp.raise_for_status()
+        time.sleep(_ARXIV_RATE_LIMIT_S)
+
+        root = ET.fromstring(resp.text)
+        for entry in root.findall(f"{{{_ARXIV_NS}}}entry"):
+            # arXiv ID: strip URL prefix and version suffix
+            id_elem = entry.find(f"{{{_ARXIV_NS}}}id")
+            if id_elem is None or not id_elem.text:
+                continue
+            raw_id = id_elem.text.strip()
+            # e.g. "http://arxiv.org/abs/2301.12345v2" → "2301.12345"
+            arxiv_id = re.sub(r"v\d+$", "", raw_id.split("/abs/")[-1])
+
+            title_elem = entry.find(f"{{{_ARXIV_NS}}}title")
+            title = " ".join((title_elem.text or "").split()) if title_elem is not None else ""
+
+            summary_elem = entry.find(f"{{{_ARXIV_NS}}}summary")
+            abstract = " ".join((summary_elem.text or "").split()) if summary_elem is not None else ""
+
+            pmid_proxy = f"arxiv:{arxiv_id}"
+            db.upsert_paper(PaperRecord(
+                pmid=pmid_proxy, run_id=run_id, title=title, abstract=abstract,
+                fulltext=None, page_image_paths=[], source="abstract",
+                screening_decision="uncertain", screening_reason="",
+                extracted_data={}, grade_score=_DEFAULT_GRADE,
+                provenance=[], quarantined_fields=[],
+            ))
+            arxiv_count += 1
+    except Exception as exc:
+        import warnings
+        warnings.warn(f"arXiv search failed: {exc}", RuntimeWarning, stacklevel=2)
+
+    return {"_arxiv_count": arxiv_count}
+
 def _merge_counts_node(state: dict) -> dict:
-    search_sources = state.get("search_sources", ["pubmed"])
     pubmed_count = state.get("_pubmed_count", 0)
-    biorxiv_count = state.get("_biorxiv_count", 0) if "biorxiv" in search_sources else 0
-    total = pubmed_count + biorxiv_count
+    biorxiv_count = state.get("_biorxiv_count", 0)
+    arxiv_count = state.get("_arxiv_count", 0)
+    total = pubmed_count + biorxiv_count + arxiv_count
     return {
         "search_counts": SearchCounts(
             n_retrieved=total,
             n_duplicates_removed=0,
             n_pubmed=pubmed_count,
             n_biorxiv=biorxiv_count,
+            n_arxiv=arxiv_count,
         )
     }
-
-def _should_search_biorxiv(state: dict) -> str:
-    sources = state.get("search_sources", ["pubmed"])
-    return "biorxiv" if "biorxiv" in sources else "merge"
 
 def create_search_subgraph(db: Database):
     builder = StateGraph(SearchSubgraphState)
 
     builder.add_node("search_pubmed", lambda s: _search_pubmed_node(s, db))
     builder.add_node("fetch_pubmed_abstracts", lambda s: _fetch_pubmed_abstracts_node(s, db))
+    # Both source nodes are self-gating: they check search_sources internally.
     builder.add_node("search_biorxiv", lambda s: _search_biorxiv_node(s, db))
+    builder.add_node("search_arxiv", lambda s: _search_arxiv_node(s, db))
     builder.add_node("merge_counts", _merge_counts_node)
 
     builder.set_entry_point("search_pubmed")
     builder.add_edge("search_pubmed", "fetch_pubmed_abstracts")
-    builder.add_conditional_edges(
-        "fetch_pubmed_abstracts",
-        _should_search_biorxiv,
-        {"biorxiv": "search_biorxiv", "merge": "merge_counts"},
-    )
-    builder.add_edge("search_biorxiv", "merge_counts")
+    builder.add_edge("fetch_pubmed_abstracts", "search_biorxiv")
+    builder.add_edge("search_biorxiv", "search_arxiv")
+    builder.add_edge("search_arxiv", "merge_counts")
     builder.add_edge("merge_counts", END)
 
     return builder.compile()
