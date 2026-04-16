@@ -2,7 +2,7 @@
 
 A general-purpose Systematic Literature Review (SLR) agent that takes any research question as input, runs a PRISMA-compliant pipeline, and produces a structured manuscript.
 
-Runs entirely locally using **Gemma 4 E4B via Ollama** (default, 9.6 GB). Orchestrated with **LangGraph** hierarchical subgraphs for explicit state machine control, resumability, and full audit trails.
+Runs entirely locally using LLM of your choice via **Ollama** (default, **Gemma 4 E4B** 9.6 GB). Orchestrated with **LangGraph** hierarchical subgraphs for explicit state machine control, resumability, and full audit trails.
 
 ---
 
@@ -98,15 +98,15 @@ The pipeline has 7 stages. Each produces structured output saved to `outputs/<ru
 
 ```
 ① PICO Formulation     — Translates question → PICO + PubMed queries
-② Search               — PubMed Entrez + bioRxiv; date range; dedup
+② Search               — PubMed Entrez + bioRxiv + arXiv (opt-in); date range; dedup
 ③ Screening            — LLM screens abstracts with explicit criteria
 ④ Full-text (optional) — Fetches and screens PMC PDFs
 ⑤ Data Extraction      — Structured extraction per paper + GRADE scoring
-⑥ Evidence Synthesis   — Narrative synthesis + PRISMA flow
-⑦ Manuscript           — Sectioned draft + rubric-guided revision loop
+⑥ Evidence Synthesis   — Narrative synthesis + PRISMA flow + open questions
+⑦ Manuscript           — Writer → citation verifier → adversarial reviewer → rubric revision loop
 ```
 
-At each HITL gate you can edit, override, or add data before the pipeline continues. At the **Stage 1 gate** you can also edit search configuration (sources, date range, max results). At the **Stage 2 gate** you can exclude papers by PMID or add papers manually. At the **Stage 3 gate** you can first review AI-generated inclusion/exclusion criteria, then review per-paper screening decisions — each paper shows a **criterion scorecard** (`✓`/`✗`/`?` per criterion with a supporting note from the abstract) plus per-paper Include/Uncertain/Exclude override buttons. At the **Stage 5 gate** you can exclude papers and mark quarantined fields for LLM re-verification. At the **Stage 7 gate** you can edit the draft directly, rewrite any section with a custom LLM prompt, or trigger a full LLM revision pass.
+At each HITL gate you can edit, override, or add data before the pipeline continues. At the **Stage 1 gate** you can also edit search configuration (sources, date range, max results) — this is where you enable arXiv by adding `"arxiv"` to the sources list. At the **Stage 2 gate** you can exclude papers by PMID or add papers manually; excluded papers are pinned and skipped by the LLM screener. At the **Stage 3 gate** you can first review AI-generated inclusion/exclusion criteria, then review per-paper screening decisions — each paper shows a **criterion scorecard** (`✓`/`✗`/`?` per criterion with a supporting note from the abstract) plus per-paper Include/Uncertain/Exclude override buttons. At the **Stage 5 gate** you can exclude papers and mark quarantined fields for LLM re-verification. At the **Stage 6 gate** you see the synthesis preview plus any **unresolved questions** the LLM identified (each tagged `high`/`medium`/`low` importance) — these surface evidence gaps before the manuscript is written. At the **Stage 7 gate** you see the draft alongside its rubric score and the **adversarial reviewer's** FATAL/MAJOR/MINOR findings; FATAL issues that name a prior stage trigger an automatic one-shot rerun before the gate opens. You can also edit the draft directly, rewrite any section with a custom LLM prompt, or trigger a full LLM revision pass.
 
 ---
 
@@ -122,7 +122,7 @@ outputs/<run_id>/
   stage_3_screening.json         # per-paper decisions + criterion scores
   stage_4_fulltext.json          # full-text fetch stats
   stage_5_extraction.json        # per-paper extracted fields + GRADE + quarantined
-  stage_6_synthesis.json         # claims, supporting PMIDs, narrative
+  stage_6_synthesis.json         # claims, supporting PMIDs, narrative, unresolved_questions
   stage_7_rubric.json            # rubric scores (met/partial/not met)
   stage_7_draft_v1.md            # first manuscript draft
   stage_7_draft_v2.md            # revision 2 (if triggered), etc.
@@ -141,7 +141,7 @@ outputs/<run_id>/
 |---|---|
 | LLM runtime | Ollama — Gemma 4 E4B (default, 9.6 GB); `gemma4:26b` MoE (18 GB) or `gemma4:31b` (20 GB) for best results |
 | Orchestration | LangGraph hierarchical subgraphs + SQLite checkpointer |
-| Search | PubMed Entrez (Biopython) + bioRxiv REST API (httpx) |
+| Search | PubMed Entrez (Biopython) + bioRxiv REST API + arXiv Atom API (httpx) |
 | PDF parsing | PyMuPDF |
 | Fuzzy matching / grounding | rapidfuzz |
 | UI | Gradio |
@@ -154,7 +154,17 @@ outputs/<run_id>/
 
 ## Grounding & Audit Trail
 
-Every LLM-extracted value is **fuzzy-matched against its source text** (abstract or full-text) using `token_set_ratio` (rapidfuzz). The threshold is source-adaptive: 75 for abstracts (paraphrased summaries), 85 for full text (verbatim). Short values under 20 characters use exact substring search instead. On match, the exact span is stored as provenance. On failure, the field is **quarantined** — kept but flagged, not dropped.
+Every LLM-extracted value is **fuzzy-matched against its source text** (abstract or full-text) using `token_set_ratio` (rapidfuzz). The threshold is source-adaptive: 75 for abstracts (paraphrased summaries), 85 for full text (verbatim). Short values under 20 characters use exact substring search instead.
+
+On match, the exact character span is stored as provenance with a `provenance_type`:
+
+| Type | Meaning |
+|---|---|
+| `direct` | Exact substring — value appears verbatim in source |
+| `paraphrased` | Fuzzy match — value is a paraphrase of the source |
+| `inferred` | LLM-confirmed — failed fuzzy matching but a second-pass LLM call confirmed the source supports the value |
+
+Fields that fail fuzzy matching go through **automatic LLM grounding** before being quarantined: the model is asked whether the source text supports the value even if phrased differently. Confirmed fields are promoted with `confidence=80` and `provenance_type="inferred"`. Only fields the LLM also cannot confirm are quarantined.
 
 - `slr status <run_id>` shows quarantined field counts
 - Quarantined items appear in HITL gates for manual resolution (accept / edit / discard)
@@ -212,12 +222,12 @@ slr_agent/
   export.py           # Pandoc .docx export
   subgraphs/
     pico.py           # Stage 1: PICO formulation + query generation
-    search.py         # Stage 2: PubMed + bioRxiv search
+    search.py         # Stage 2: PubMed + bioRxiv + arXiv search
     screening.py      # Stage 3: abstract screening with criteria
     fulltext.py       # Stage 4: PMC PDF fetch + screen
     extraction.py     # Stage 5: structured data extraction + GRADE
     synthesis.py      # Stage 6: narrative synthesis
-    manuscript.py     # Stage 7: two-pass draft + rubric scoring
+    manuscript.py     # Stage 7: writer → citation verifier → adversarial reviewer → rubric
   ui/
     app.py            # Gradio app factory (build_app_with_handler)
     panels/           # Per-stage review panels (pico, search, screening,
