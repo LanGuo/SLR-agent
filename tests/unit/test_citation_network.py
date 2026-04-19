@@ -101,11 +101,15 @@ def test_build_citation_network_detects_dominant_paper():
 
 
 def test_build_citation_network_no_warning_when_citations_spread():
-    """No warning when no single paper dominates."""
+    """No warning when neither dominant-paper nor echo-chamber threshold is met.
+
+    Only 1/3 papers cites another corpus paper (echo_ratio=0.33 ≤ 0.5) and
+    no single paper is cited by >50% of the corpus (dominant_count/n=0.33 ≤ 0.5).
+    """
     papers = [
-        {"pmid": "111", "fulltext": _make_xml("222")},
-        {"pmid": "222", "fulltext": _make_xml("333")},
-        {"pmid": "333", "fulltext": _make_xml("111")},
+        {"pmid": "111", "fulltext": _make_xml("222")},  # 111 cites 222
+        {"pmid": "222", "fulltext": None},
+        {"pmid": "333", "fulltext": None},
     ]
     summary = build_citation_network(papers)
     assert summary.warning is None
@@ -129,3 +133,17 @@ def test_citation_network_summary_to_dict():
     assert d["n_cross_citations"] == 1
     import json
     json.dumps(d)  # must not raise
+
+
+def test_build_citation_network_warns_on_high_echo_chamber_ratio():
+    """Warning fires when >50% of papers cite at least one other corpus paper,
+    even when no single paper accounts for >50% of citations."""
+    # Each paper cites one other — echo_ratio=1.0, but dominant_count/n = 1/3
+    papers = [
+        {"pmid": "111", "fulltext": _make_xml("222")},
+        {"pmid": "222", "fulltext": _make_xml("333")},
+        {"pmid": "333", "fulltext": _make_xml("111")},
+    ]
+    summary = build_citation_network(papers)
+    assert summary.echo_chamber_ratio == pytest.approx(1.0)
+    assert summary.warning is not None

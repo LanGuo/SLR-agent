@@ -96,6 +96,13 @@ def build_citation_network(papers: list[dict]) -> CitationNetworkSummary:
             f"({pct}). Evidence base may not be independent — multiple papers may "
             f"derive from the same original source."
         )
+    elif echo_ratio > 0.5:
+        pct = f"{echo_ratio:.0%}"
+        warning = (
+            f"{n_papers_citing_corpus}/{n} included papers ({pct}) cite at least one "
+            f"other included paper. Check for circular citation patterns that could "
+            f"inflate apparent evidence volume."
+        )
 
     return CitationNetworkSummary(
         n_papers=n,
