@@ -63,3 +63,9 @@ def test_orchestrator_state_new_fields():
     assert "date_from" in keys
     assert "date_to" in keys
     assert "screening_criteria" in keys
+
+
+def test_orchestrator_state_has_citation_network_field():
+    from slr_agent.state import OrchestratorState
+    keys = OrchestratorState.__annotations__
+    assert "citation_network" in keys

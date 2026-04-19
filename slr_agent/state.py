@@ -56,3 +56,4 @@ class OrchestratorState(TypedDict):
     screening_criteria: dict | None    # {inclusion_criteria, exclusion_criteria, study_designs}
     unresolved_questions: list[dict] | None  # open questions from synthesis (importance: high/medium/low)
     adversarial_review: dict | None  # {issues: [{severity, section, issue, suggestion, rerun_stage}]}
+    citation_network: dict | None   # CitationNetworkSummary.to_dict(); None if fulltext not fetched
