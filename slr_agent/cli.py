@@ -18,11 +18,14 @@ _OUTPUT_DIR = "outputs"
 
 
 def _build_orchestrator(config: RunConfig, broker: CheckpointBroker, emitter: ProgressEmitter):
+    from slr_agent.cache import LLMCache
     db = Database(_DB_PATH)
     trace_writer = TraceWriter(emitter.run_dir)
+    cache = LLMCache(os.path.join(emitter.run_dir, ".llm_cache"))
     llm = LLMClient(
         model=config.get("model", DEFAULT_CONFIG["model"]),
         trace_writer=trace_writer,
+        cache=cache,
     )
     broker._trace = trace_writer
     orchestrator = create_orchestrator(
