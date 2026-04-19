@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 
 
@@ -45,8 +46,11 @@ class LLMCache:
         path = self._path(self._key(model, messages, schema, think))
         if not os.path.exists(path):
             return None
-        with open(path) as f:
-            return json.load(f)["result"]
+        try:
+            with open(path) as f:
+                return json.load(f)["result"]
+        except (json.JSONDecodeError, KeyError, OSError):
+            return None
 
     def put(
         self,
@@ -57,12 +61,18 @@ class LLMCache:
         result: dict,
     ) -> None:
         path = self._path(self._key(model, messages, schema, think))
-        with open(path, "w") as f:
-            json.dump(
-                {
-                    "result": result,
-                    "model": model,
-                    "cached_at": datetime.now(timezone.utc).isoformat(),
-                },
-                f,
-            )
+        fd, tmp_path = tempfile.mkstemp(dir=self.cache_dir, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(
+                    {
+                        "result": result,
+                        "model": model,
+                        "cached_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                    f,
+                )
+            os.replace(tmp_path, path)
+        except:
+            os.unlink(tmp_path)
+            raise

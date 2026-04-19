@@ -1,4 +1,7 @@
 # tests/unit/test_cache.py
+import json
+import os
+
 import pytest
 from slr_agent.cache import LLMCache
 
@@ -40,12 +43,10 @@ def test_different_think_flag_produces_different_keys(tmp_path):
 def test_cache_creates_directory_on_init(tmp_path):
     cache_dir = str(tmp_path / "nested" / "cache")
     LLMCache(cache_dir)
-    import os
     assert os.path.isdir(cache_dir)
 
 
 def test_cache_file_contains_metadata(tmp_path):
-    import json, os
     cache = LLMCache(str(tmp_path))
     model = "gemma4:e4b"
     messages = [{"role": "user", "content": "hi"}]
@@ -59,9 +60,21 @@ def test_cache_file_contains_metadata(tmp_path):
     assert "cached_at" in data
 
 
+def test_cache_get_handles_corrupted_file(tmp_path):
+    cache = LLMCache(str(tmp_path))
+    model = "gemma4:e4b"
+    messages = [{"role": "user", "content": "hi"}]
+    schema = None
+    think = False
+    path = cache._path(cache._key(model, messages, schema, think))
+    with open(path, "wb") as f:
+        f.write(b"not json")
+    result = cache.get(model, messages, schema, think)
+    assert result is None
+
+
 def test_llm_cache_path_convention(tmp_path):
     """Verify the cache directory naming convention used by cli.py."""
-    import os
     run_id = "abc12345"
     output_dir = str(tmp_path)
     expected_cache_dir = os.path.join(output_dir, run_id, ".llm_cache")
