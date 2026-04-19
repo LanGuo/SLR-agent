@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from slr_agent.trace import TraceWriter
+    from slr_agent.cache import LLMCache
 
 
 class LLMClient:
@@ -16,10 +17,12 @@ class LLMClient:
         model: str = "gemma4:e4b",
         max_retries: int = 3,
         trace_writer: "TraceWriter | None" = None,
+        cache: "LLMCache | None" = None,
     ):
         self.model = model
         self.max_retries = max_retries
         self._trace = trace_writer
+        self._cache = cache
 
     def chat(self, messages: list[dict], schema: dict | None = None, think: bool = False) -> dict:
         """Call Ollama and return parsed JSON. Raises after max_retries.
@@ -31,6 +34,11 @@ class LLMClient:
             think: Enable Gemma 4 thinking mode. The reasoning chain is saved to
                 llm_trace.jsonl (if tracing is enabled) and discarded from the return value.
         """
+        if self._cache is not None:
+            cached = self._cache.get(self.model, messages, schema, think)
+            if cached is not None:
+                return cached
+
         last_error = None
         t_start = time.time()
         for attempt in range(self.max_retries):
@@ -69,6 +77,9 @@ class LLMClient:
                         completion_tokens=completion_tokens,
                         model=self.model,
                     )
+
+                if self._cache is not None:
+                    self._cache.put(self.model, messages, schema, think, result)
 
                 return result
             except json.JSONDecodeError as e:
