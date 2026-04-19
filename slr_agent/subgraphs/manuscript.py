@@ -186,7 +186,7 @@ _REVIEW_SCHEMA = {
 }
 
 
-def _adversarial_review_node(draft: str, synthesis_path: str, llm) -> dict:
+def _adversarial_review_node(draft: str, synthesis_path: str, llm, citation_warning: str | None = None) -> dict:
     """Adversarial reviewer: critiques the draft with FATAL/MAJOR/MINOR severity.
 
     FATAL issues may name a prior pipeline stage to rerun (rerun_stage: screening |
@@ -199,6 +199,14 @@ def _adversarial_review_node(draft: str, synthesis_path: str, llm) -> dict:
     if synthesis_path and os.path.exists(synthesis_path):
         with open(synthesis_path) as f:
             synthesis_text = f.read()
+
+    citation_section = ""
+    if citation_warning:
+        citation_section = (
+            f"\n\nCITATION NETWORK ALERT:\n{citation_warning}\n"
+            "Check whether the manuscript accurately represents the independence "
+            "of the evidence base, or whether it overstates the number of independent studies."
+        )
 
     try:
         result = llm.chat([{
@@ -215,6 +223,7 @@ def _adversarial_review_node(draft: str, synthesis_path: str, llm) -> dict:
                 "- MINOR: a style, clarity, or minor accuracy issue\n\n"
                 f"MANUSCRIPT DRAFT:\n{draft[:8000]}\n\n"
                 f"SYNTHESIS:\n{synthesis_text[:2000]}\n\n"
+                f"{citation_section}"
                 "Return JSON with field 'issues': list of "
                 "{severity, section, issue, suggestion, rerun_stage}."
             ),
@@ -369,7 +378,12 @@ def _draft_manuscript_node(state: dict, db: Database, llm, output_dir: str) -> d
     draft = _verify_citations_node(draft, synthesis_path, llm)
 
     # Adversarial reviewer pass — structured critique before Gate 7
-    adversarial_review = _adversarial_review_node(draft, synthesis_path, llm)
+    citation_warning = None
+    cn = state.get("citation_network") or {}
+    if cn.get("warning"):
+        citation_warning = cn["warning"]
+
+    adversarial_review = _adversarial_review_node(draft, synthesis_path, llm, citation_warning=citation_warning)
 
     # Write versioned draft
     run_dir = os.path.join(output_dir, run_id)

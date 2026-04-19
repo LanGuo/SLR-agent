@@ -256,3 +256,75 @@ def test_adversarial_review_fatal_sets_rerun_stage(db, tmp_path):
                     if i["severity"] == "FATAL"]
     assert len(fatal_issues) == 1
     assert fatal_issues[0]["rerun_stage"] == "screening"
+
+
+def test_adversarial_reviewer_receives_citation_network_warning(db, tmp_path, mock_llm):
+    """Citation network warning appears in the adversarial reviewer prompt."""
+    from slr_agent.subgraphs.manuscript import create_manuscript_subgraph
+    import os
+
+    # Write a synthesis file
+    syn_dir = str(tmp_path)
+    syn_path = os.path.join(syn_dir, "synthesis.md")
+    with open(syn_path, "w") as f:
+        f.write("- Aspirin reduces BP. [11111]\n")
+
+    # Register responses for each section in the default template
+    from slr_agent.template import DEFAULT_PRISMA_TEMPLATE
+    for section in DEFAULT_PRISMA_TEMPLATE["sections"]:
+        mock_llm.register(f"write the {section['name'].lower()} section",
+                          {"text": f"Content of {section['name']}."})
+    mock_llm.register("Anchor citations", {"anchored": []})
+    mock_llm.register("adversarial reviewer", {"issues": []})
+    mock_llm.register("score the following systematic review draft", {"scores": []})
+
+    sg = create_manuscript_subgraph(db=db, llm=mock_llm, output_dir=str(tmp_path))
+    state = {
+        "run_id": "test-adv-cn",
+        "pico": {"population": "adults", "intervention": "aspirin",
+                 "comparator": "placebo", "outcome": "BP",
+                 "query_strings": [], "source_language": "en",
+                 "search_language": "en", "output_language": "en"},
+        "synthesis_path": syn_path,
+        "manuscript_draft_version": 1,
+        "search_counts": {"n_retrieved": 1, "n_duplicates_removed": 0,
+                          "n_pubmed": 1, "n_biorxiv": 0, "n_arxiv": 0},
+        "screening_counts": {"n_included": 1, "n_excluded": 0, "n_uncertain": 0},
+        "fulltext_counts": None,
+        "template": None,
+        "config": {},
+        "search_sources": ["pubmed"],
+        "date_from": "2000-01-01",
+        "date_to": "2026-12-31",
+        "citation_network": {
+            "n_papers": 3,
+            "n_cross_citations": 3,
+            "echo_chamber_ratio": 1.0,
+            "dominant_pmid": "11111",
+            "dominant_count": 2,
+            "warning": "PMID 11111 is cited by 2/3 included papers. Evidence may not be independent.",
+        },
+    }
+
+    # The adversarial reviewer prompt should include the warning text.
+    # We verify by checking what prompt was passed to the LLM.
+    calls = []
+    original_chat = mock_llm.chat
+    def capturing_chat(messages, schema=None, think=False):
+        calls.append(messages)
+        return original_chat(messages, schema=schema, think=think)
+    mock_llm.chat = capturing_chat
+
+    sg.invoke(state)
+
+    adversarial_calls = [
+        msgs for msgs in calls
+        if any("adversarial" in (m.get("content") or "").lower() for m in msgs)
+    ]
+    assert adversarial_calls, "No adversarial reviewer call found"
+    adversarial_prompt = " ".join(m.get("content", "") for m in adversarial_calls[0])
+    # The citation network warning text must appear in the adversarial reviewer prompt
+    assert "CITATION NETWORK ALERT" in adversarial_prompt, (
+        "Citation network warning was not passed to the adversarial reviewer prompt"
+    )
+    assert "PMID 11111 is cited by 2/3 included papers" in adversarial_prompt
