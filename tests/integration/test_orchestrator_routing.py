@@ -78,6 +78,79 @@ def test_orchestrator_skips_fulltext_when_disabled(db, tmp_path):
     assert result["fulltext_counts"] is None
 
 
+def test_orchestrator_computes_citation_network(db, tmp_path):
+    """Citation network summary is present in final state after a run."""
+    from unittest.mock import patch, MagicMock
+    from slr_agent.llm import MockLLM
+    from slr_agent.orchestrator import create_orchestrator
+    from slr_agent.broker import CheckpointBroker, NoOpHandler
+    from slr_agent.emitter import ProgressEmitter
+    from slr_agent.config import DEFAULT_CONFIG
+
+    llm = MockLLM()
+    llm.register("detect the language", {"language_code": "en"})
+    llm.register("expand this research question into PICO", {
+        "population": "adults", "intervention": "aspirin",
+        "comparator": "placebo", "outcome": "BP reduction",
+    })
+    llm.register("Generate 3-4 PubMed search query strings", {"query_strings": ["hypertension"]})
+    llm.register("Generate explicit, specific inclusion and exclusion criteria", {
+        "inclusion_criteria": ["RCT"], "exclusion_criteria": ["review"], "study_designs": ["RCT"]
+    })
+    llm.register("You are screening abstracts for a systematic review", {"decisions": [
+        {"pmid": "11111", "decision": "include", "reason": "RCT",
+         "criterion_scores": [{"criterion": "RCT", "type": "study_design", "met": "yes", "note": ""}]}
+    ]})
+    llm.register("Screen this full text", {"decision": "include", "reason": "RCT confirmed"})
+    llm.register("Extract structured data", {
+        "sample_size": "100", "intervention": "aspirin", "comparator": "placebo",
+        "primary_outcome": "BP", "result": "reduced", "study_design": "RCT",
+        "follow_up_duration": "12 weeks", "population_details": "adults with hypertension",
+    })
+    llm.register("supported", {"supported": True, "span": "aspirin"})
+    llm.register("synthesise the evidence", {
+        "narrative": "Aspirin reduces BP.", "claims": [], "unresolved_questions": []
+    })
+    # Section writing must come before GRADE to avoid matching "GRADE" in the search_context
+    for section_name in ["Abstract", "Introduction", "Methods", "Results", "Discussion", "Conclusions"]:
+        llm.register(f"write the {section_name.lower()} section", {"text": f"{section_name} text."})
+    llm.register("Anchor citations for a systematic review", {"anchored": []})
+    llm.register("You are an adversarial reviewer", {"issues": []})
+    llm.register("score the following systematic review draft", {"scores": []})
+    llm.register("GRADE", {"certainty": "moderate", "risk_of_bias": "low",
+                            "inconsistency": "no", "indirectness": "no",
+                            "imprecision": "no", "rationale": "RCT"})
+    llm.register("Does the source text", {"supported": False, "span": ""})
+
+    output_dir = str(tmp_path)
+    orchestrator = create_orchestrator(
+        db=db, llm=llm, output_dir=output_dir,
+        config={**DEFAULT_CONFIG, "checkpoint_stages": [], "fetch_fulltext": False,
+                "search_sources": ["pubmed"]},
+        broker=CheckpointBroker(NoOpHandler()),
+        emitter=ProgressEmitter(output_dir=output_dir, run_id="test-cn"),
+    )
+
+    with patch("slr_agent.subgraphs.search.Entrez") as mock_e:
+        mock_e.esearch.return_value = MagicMock()
+        mock_e.read.side_effect = [
+            {"IdList": ["11111"]}, {"IdList": []},
+            {"PubmedArticle": [{"MedlineCitation": {
+                "PMID": "11111",
+                "Article": {"ArticleTitle": "Test", "Abstract": {"AbstractText": "aspirin reduces BP"}},
+            }}]},
+        ]
+        mock_e.efetch.return_value = MagicMock()
+        result = orchestrator.invoke(
+            {"run_id": "test-cn", "raw_question": "Does aspirin reduce BP?"}
+        )
+
+    assert "citation_network" in result
+    cn = result["citation_network"]
+    assert isinstance(cn, dict)
+    assert cn["n_papers"] >= 0
+
+
 def test_orchestrator_emits_stage_files(db, tmp_path):
     """ProgressEmitter writes stage JSON files to outputs/<run_id>/."""
     with patch("slr_agent.subgraphs.search.Entrez") as mock_entrez:

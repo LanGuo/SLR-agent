@@ -17,6 +17,7 @@ from slr_agent.subgraphs.fulltext import create_fulltext_subgraph
 from slr_agent.subgraphs.extraction import create_extraction_subgraph
 from slr_agent.subgraphs.synthesis import create_synthesis_subgraph
 from slr_agent.subgraphs.manuscript import create_manuscript_subgraph
+from slr_agent.citation_network import build_citation_network
 
 
 def _should_fetch_fulltext(state: dict) -> str:
@@ -82,6 +83,7 @@ def create_orchestrator(
             "search_sources": cfg.get("search_sources", ["pubmed"]),
             "max_results": cfg.get("max_results", 500),
             "screening_criteria": None,
+            "citation_network": None,
             "current_stage": "pico",
             "checkpoint_pending": False,
         }
@@ -252,10 +254,15 @@ def create_orchestrator(
         return {**state, **result, "screening_criteria": screening_criteria, "current_stage": "screening_done"}
 
     def fulltext_node(state: dict) -> dict:
+        run_id = state["run_id"]
         result = fulltext_sg.invoke(state)
         emit_data = dict(result.get("fulltext_counts") or {})
-        _get_emitter(state["run_id"]).emit(4, emit_data)
-        return {**state, **result, "current_stage": "fulltext_done"}
+        _get_emitter(run_id).emit(4, emit_data)
+        included = db.get_papers_by_decision(run_id, "include")
+        cn_summary = build_citation_network(included)
+        if cn_summary.warning:
+            _get_emitter(run_id).log(cn_summary.warning)
+        return {**state, **result, "citation_network": cn_summary.to_dict(), "current_stage": "fulltext_done"}
 
     def extraction_node(state: dict) -> dict:
         n_included = len(db.get_papers_by_decision(state["run_id"], "include"))
@@ -295,15 +302,25 @@ def create_orchestrator(
         if synthesis_path and os.path.exists(synthesis_path):
             with open(synthesis_path) as f:
                 synthesis_text = f.read()
+        # Compute citation network here if fulltext was skipped (fetch_fulltext=False)
+        citation_network = state.get("citation_network")
+        if citation_network is None:
+            included = db.get_papers_by_decision(run_id, "include")
+            cn_summary = build_citation_network(included)
+            if cn_summary.warning:
+                _get_emitter(run_id).log(cn_summary.warning)
+            citation_network = cn_summary.to_dict()
+        cn = citation_network or {}
         emit_data = {
             "synthesis_path": synthesis_path,
             "preview": synthesis_text[:500],
             "unresolved_questions": result.get("unresolved_questions") or [],
+            "citation_network": cn,
         }
         _maybe_pause(6, "synthesis", emit_data, run_id)
         # Note: stage 6 edits (synthesis text) are written directly to synthesis_path
         # by the Gradio panel's on_approve handler; the broker return is not needed here.
-        return {**state, **result, "current_stage": "synthesis_done"}
+        return {**state, **result, "citation_network": citation_network, "current_stage": "synthesis_done"}
 
     def manuscript_node(state: dict) -> dict:
         run_id = state["run_id"]
