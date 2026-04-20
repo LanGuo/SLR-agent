@@ -36,10 +36,11 @@ flowchart TB
         G1{{"⏸ HITL Gate 1\nEdit PICO + search config"}}
     end
 
-    subgraph S2["② Literature Search  🔍 Entrez + bioRxiv"]
+    subgraph S2["② Literature Search  🔍 Entrez + bioRxiv + arXiv (opt-in)"]
         direction LR
         P3["PubMed Entrez\nesearch → efetch"]
         P4["bioRxiv REST API\nhttpx"]
+        P4b["arXiv Atom API\nopt-in · httpx"]
         P5["Dedup + store\nSQLite"]
         G2{{"⏸ HITL Gate 2\nExclude / add PMIDs"}}
     end
@@ -59,6 +60,7 @@ flowchart TB
         P10["efetch XML\nfull text"]
         P11["OA API → download PDF\nPyMuPDF → PNG pages\n150 DPI · max 10 pages"]
         P12["Screen full text\n+ page images\nGemma 4 vision"]
+        P12b["Citation network\necho-chamber ratio\ndominant paper detection"]
     end
 
     subgraph S5["⑤ Data Extraction  👁️ multimodal · structured output"]
@@ -90,6 +92,7 @@ flowchart TB
         DB[("SQLite\nPaper store\nQuarantine table\nLangGraph checkpoints")]
         EM["ProgressEmitter\nJSON stage files\noutputs/run_id/"]
         OL["Ollama\ngemma4:e4b  9.6 GB\nLocal · private · no API key"]
+        CA["LLMCache\nSHA-256 disk cache\n.llm_cache/ per run"]
         UI["Gradio UI\nper-stage review panels"]
     end
 
@@ -110,6 +113,7 @@ flowchart TB
     S1 & S2 & S3 & S4 & S5 & S6 & S7 -.->|state| DB
     S1 & S2 & S3 & S4 & S5 & S6 & S7 -.->|emit| EM
     S1 & S3 & S4 & S5 & S6 & S7 -.->|LLM calls| OL
+    S1 & S3 & S4 & S5 & S6 & S7 -.->|cache| CA
     G1 & G2 & G3a & G3b & G5 & G7 -.->|review| UI
 
     %% Styles
@@ -146,7 +150,7 @@ flowchart LR
     subgraph P["Pipeline  —  LangGraph hierarchical subgraphs  —  SQLite resumable checkpoints"]
         direction LR
         S1["① PICO\nFormulation"]
-        S2["② Search\nPubMed · bioRxiv"]
+        S2["② Search\nPubMed · bioRxiv · arXiv"]
         S3["③ Screening\nAbstracts"]
         S4["④ Full-text\nPDF + Vision"]
         S5["⑤ Extraction\nGRADE scoring"]

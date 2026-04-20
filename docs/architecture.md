@@ -132,10 +132,11 @@ class OrchestratorState(TypedDict):
     manuscript_draft_version: int
     date_from: str | None          # search date range, e.g. "2000-01-01"
     date_to: str | None            # search date range, e.g. "2026-12-31"
-    search_sources: list[str]      # ["pubmed"] | ["pubmed", "biorxiv"]
+    search_sources: list[str]      # ["pubmed"] | ["pubmed", "biorxiv"] | ["pubmed", "biorxiv", "arxiv"]
     max_results: int
     screening_criteria: dict | None  # {inclusion_criteria, exclusion_criteria, study_designs}
     unresolved_questions: list[dict] | None  # open questions from synthesis (importance: high/medium/low)
+    citation_network: dict | None  # CitationNetworkSummary.to_dict(); None if fulltext not fetched
     current_stage: str
     checkpoint_pending: bool
 ```
@@ -163,7 +164,8 @@ class RunConfig(TypedDict, total=False):
     output_format: Literal["markdown", "word", "both"]
     pubmed_api_key: str | None
     max_results: int               # total cap (PubMed: distributed across queries), default 500
-    search_sources: list[str]      # ["pubmed"] | ["pubmed", "biorxiv"]
+    model: str                     # Ollama model tag, default "gemma4:e4b"
+    search_sources: list[str]      # ["pubmed"] | ["pubmed", "biorxiv"] | ["pubmed", "biorxiv", "arxiv"]
     date_from: str | None          # "YYYY-MM-DD", default "2000-01-01"
     date_to: str | None            # "YYYY-MM-DD", default today
     template_path: str | None      # JSON schema or PDF reference paper
@@ -384,9 +386,18 @@ The cap is applied to the **total** retrieved, not per-query. Without the 2× fa
 - PICO relevance filtering happens in Stage 3 screening (LLM-based), not at retrieval time
 - Failures (network, timeout, non-200 HTTP) emit a `RuntimeWarning` and the pipeline continues with PubMed results only
 
+### arXiv (opt-in)
+
+- Atom API: `https://export.arxiv.org/api/query?search_query=...`
+- Keyword search only — PubMed field tags (`[MeSH]`, `[tiab]`, `[Title/Abstract]`) are stripped from query strings before submission
+- PMIDs are stored as `arxiv:{arxiv_id}` proxies so they flow through the same paper store as PubMed records
+- Rate limit: 3 req/s enforced via `time.sleep(3)` between requests
+- Failures are non-fatal — the pipeline continues with PubMed (+ bioRxiv) results
+- Enable by adding `"arxiv"` to `search_sources` at the Stage 1 gate
+
 #### Combined volume
 
-With both sources enabled, the total paper count entering screening can be up to `2 × max_results` (PubMed cap + bioRxiv cap independently). Set `search_sources: ["pubmed"]` to stay within `max_results` total.
+With all three sources enabled, the total paper count entering screening can be up to `3 × max_results`. Set `search_sources: ["pubmed"]` to stay within `max_results` total.
 
 ### Search configuration (user-editable at Stage 1 gate)
 
@@ -581,6 +592,49 @@ broker._trace = trace_writer
 | Measure LLM latency per stage | `llm_trace.jsonl` | Aggregate `"latency_s"` by prompt content |
 | Identify JSON retry failures | `llm_trace.jsonl` | Filter `"error": {"$ne": null}` |
 | Token usage per run | `llm_trace.jsonl` | Sum `"prompt_tokens"` + `"completion_tokens"` |
+
+---
+
+## LLM Call Caching
+
+`LLMCache` (`slr_agent/cache.py`) is a disk-backed cache for Ollama call results. It is instantiated once per run in `_build_orchestrator` and passed to `LLMClient` via `cache=cache`.
+
+**Key design decisions:**
+
+- **Run-scoped:** Cache files live at `outputs/<run_id>/.llm_cache/<hash>.json`. A new run always starts with an empty cache; stale results from a different model or prompt version cannot leak in.
+- **SHA-256 keyed:** The cache key is `sha256(json({model, messages, schema, think}))` with `sort_keys=True` so key order doesn't affect the hash. Images (`images=` in messages) are included in the hash when present.
+- **Atomic writes:** `put()` writes to a temp file in the same directory then renames with `os.replace` (POSIX-atomic). Crashed writes leave no partial file.
+- **Graceful read failures:** `get()` catches `json.JSONDecodeError`, `KeyError`, and `OSError` and returns `None` (cache miss), so a corrupt file from a previous crash is silently skipped rather than crashing the pipeline.
+- **Cache hit path:** If the cache returns a result, `LLMClient.chat()` returns it immediately — no Ollama call, no trace write. This makes re-runs of interrupted pipelines fast.
+- **No new dependencies:** Uses only `hashlib`, `json`, `os`, `tempfile` from stdlib.
+
+---
+
+## Citation Network Layer
+
+`slr_agent/citation_network.py` builds a lightweight within-corpus citation graph after full-text fetch (Stage 4). It detects two evidence-inflation patterns common in medical literature that GRADE's five dimensions do not capture.
+
+### How it works
+
+After `fulltext_node` completes, included papers' PubMed XML reference lists are parsed with `_extract_cited_pmids_from_xml`. Each `<ArticleId IdType="pubmed">` element is extracted and intersected with the corpus PMID set. Self-citations are excluded. Two metrics are computed:
+
+| Metric | What it measures |
+|---|---|
+| `echo_chamber_ratio` | Fraction of corpus papers that cite ≥1 other corpus paper |
+| `dominant_count / n` | Whether one paper is cited by >50% of the corpus |
+
+### Warning conditions
+
+A `warning` string is set in `CitationNetworkSummary` when:
+- **Dominant paper:** one PMID is cited by >50% of included papers — indicates many papers may derive from the same original source, inflating apparent evidence volume
+- **Echo-chamber ratio:** >50% of included papers cross-cite each other — indicates circular citation patterns
+
+### Pipeline integration
+
+- `fulltext_node` calls `build_citation_network(included_papers)` and stores `cn_summary.to_dict()` in `OrchestratorState["citation_network"]`
+- When `fetch_fulltext=False`, `synthesis_node` computes the network lazily (all papers have `fulltext=None`, so the summary is empty with no warning)
+- The summary is included in the Gate 6 emit (`stage_6_synthesis.json`) under `citation_network` so the reviewer sees it before approving synthesis
+- If a warning is present, it is passed to `_adversarial_review_node` as a `CITATION NETWORK ALERT` block in the prompt
 
 ---
 

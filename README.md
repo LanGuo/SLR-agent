@@ -122,7 +122,8 @@ outputs/<run_id>/
   stage_3_screening.json         # per-paper decisions + criterion scores
   stage_4_fulltext.json          # full-text fetch stats
   stage_5_extraction.json        # per-paper extracted fields + GRADE + quarantined
-  stage_6_synthesis.json         # claims, supporting PMIDs, narrative, unresolved_questions
+  stage_6_synthesis.json         # claims, supporting PMIDs, narrative, unresolved_questions,
+                                 #   citation_network summary (cross-citation counts, echo-chamber ratio)
   stage_7_rubric.json            # rubric scores (met/partial/not met)
   stage_7_draft_v1.md            # first manuscript draft
   stage_7_draft_v2.md            # revision 2 (if triggered), etc.
@@ -131,6 +132,7 @@ outputs/<run_id>/
   <run_id>_prisma.md             # PRISMA 2020 flow diagram (Mermaid)
   llm_trace.jsonl                # every Ollama call: prompt, thinking, response, latency, tokens
   hitl_trace.jsonl               # every HITL gate: before/after diff, user action
+  .llm_cache/                    # SHA-256 keyed JSON cache of LLM call results (run-scoped)
 ```
 
 ---
@@ -144,6 +146,8 @@ outputs/<run_id>/
 | Search | PubMed Entrez (Biopython) + bioRxiv REST API + arXiv Atom API (httpx) |
 | PDF parsing | PyMuPDF |
 | Fuzzy matching / grounding | rapidfuzz |
+| LLM call caching | SHA-256 keyed disk cache (stdlib only) — interrupted runs resume without re-calling Ollama |
+| Citation network analysis | Within-corpus citation graph — detects echo-chamber patterns and evidence inflation |
 | UI | Gradio |
 | Word export | Pandoc (Markdown → .docx) |
 | State & paper store | SQLite (`slr_runs.db`) |
@@ -215,8 +219,10 @@ slr_agent/
   trace.py            # TraceWriter — llm_trace.jsonl + hitl_trace.jsonl per run
   db.py               # SQLite paper store (PaperRecord, GRADEScore)
   grounding.py        # ExtractionGrounder (rapidfuzz span matching)
+  cache.py            # LLMCache — SHA-256 keyed disk cache for Ollama call results
+  citation_network.py # Within-corpus citation graph: echo-chamber ratio, dominant paper detection
   template.py         # Manuscript template loading (JSON / PDF / default PRISMA)
-  llm.py              # LLMClient (Ollama) + MockLLM
+  llm.py              # LLMClient (Ollama, optional cache) + MockLLM
   cli.py              # Click CLI (slr run/resume/status/export)
   prisma.py           # PRISMA flow diagram generation
   export.py           # Pandoc .docx export
