@@ -71,7 +71,15 @@ def cli():
     show_default=True,
     help="Abstracts per LLM call during screening (smaller = more reliable JSON)",
 )
-def run(question, no_fulltext, no_checkpoints, hitl, max_results, api_key, template_path, model, screening_batch_size):
+@click.option(
+    "--search-sources",
+    multiple=True,
+    type=click.Choice(["pubmed", "biorxiv", "arxiv"]),
+    default=DEFAULT_CONFIG["search_sources"],
+    show_default=True,
+    help="Search sources to use. Repeat to add sources: --search-sources pubmed --search-sources arxiv",
+)
+def run(question, no_fulltext, no_checkpoints, hitl, max_results, api_key, template_path, model, screening_batch_size, search_sources):
     """Start a new SLR run."""
     run_id = str(uuid.uuid4())[:8]
     checkpoint_stages = [] if no_checkpoints else DEFAULT_CONFIG["checkpoint_stages"]
@@ -81,7 +89,7 @@ def run(question, no_fulltext, no_checkpoints, hitl, max_results, api_key, templ
         output_format="both",
         pubmed_api_key=api_key,
         max_results=max_results,
-        search_sources=DEFAULT_CONFIG["search_sources"],
+        search_sources=list(search_sources) if search_sources else DEFAULT_CONFIG["search_sources"],
         template_path=template_path,
         hitl_mode="none" if no_checkpoints else hitl,
         model=model,

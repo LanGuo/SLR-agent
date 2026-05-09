@@ -51,40 +51,62 @@ brew install pandoc
 ### 2. Install and run
 
 ```bash
-# Install
+# Create and activate a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+
+# Install in editable mode
 pip install -e .
 
-# Run a review (CLI HITL mode — review each stage in your terminal)
+# Verify the CLI is available
+slr --help
+```
+
+With the venv activated, `slr` is available directly. Without activating, use `.venv/bin/slr` instead.
+
+```bash
+# Review each stage in your terminal (CLI HITL mode)
 slr run "Does aspirin reduce blood pressure in adults with hypertension?" --hitl cli
 
-# Run with Gradio UI review panels
+# Review in a Gradio browser UI — open http://localhost:7860
 slr run "Does aspirin reduce blood pressure?" --hitl ui
-# Then open http://localhost:7860
 
-# Fully automated (no checkpoints)
+# Fully automated — no gates, no pauses
 slr run "Does aspirin reduce blood pressure?" --no-checkpoints
 
-# With a custom manuscript template
-slr run "..." --template path/to/template.json
+# Faster run: skip fulltext, limit results
+slr run "Does aspirin reduce blood pressure?" --hitl ui --max-results 50 --no-fulltext
 
-# Resume a paused run
+# Include arXiv preprints alongside PubMed + bioRxiv
+slr run "Does aspirin reduce blood pressure?" --hitl ui \
+  --search-sources pubmed --search-sources biorxiv --search-sources arxiv
+
+# PubMed only, higher quality model
+slr run "Does aspirin reduce blood pressure?" --hitl ui \
+  --search-sources pubmed --model gemma4:26b
+
+# With a custom manuscript template (JSON schema or PDF reference paper)
+slr run "..." --hitl ui --template path/to/template.json
+
+# Resume a paused run (preserves HITL mode from original run)
 slr resume <run_id>
 
 # Check run status and quarantine report
 slr status <run_id>
 
-# Export manuscript from a completed run
+# Export manuscript to .docx from a completed run
 slr export <run_id>
 ```
 
-### Options
+### `slr run` options
 
 | Flag | Default | Description |
 |---|---|---|
 | `--hitl cli\|ui` | `cli` | Review mode: terminal prompts or Gradio browser panels |
 | `--no-checkpoints` | off | Skip all gates, run fully automated |
 | `--no-fulltext` | off | Skip full-text PDF fetching (faster) |
-| `--max-results N` | 500 | Total paper cap across all queries; distributed evenly across query strings |
+| `--max-results N` | 500 | Total paper cap across all queries |
+| `--search-sources SOURCE` | `pubmed biorxiv` | Search sources — repeat flag to add: `--search-sources pubmed --search-sources arxiv` |
 | `--model TAG` | `gemma4:e4b` | Ollama model tag (e.g. `gemma4:26b`, `gemma4:31b`) |
 | `--api-key KEY` | env `PUBMED_API_KEY` | PubMed API key (10 req/s vs 3 req/s without) |
 | `--template FILE` | PRISMA default | Manuscript template: JSON schema or PDF reference paper |
